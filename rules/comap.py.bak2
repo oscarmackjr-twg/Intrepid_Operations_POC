@@ -1,0 +1,63 @@
+# rules/comap.py
+
+import pandas as pd
+
+def comap_rules(df, matrix, cutoff_cfg, meta_cfg):
+    """
+    Loan-level CoMAP eligibility checks.
+    """
+
+    exceptions = []
+
+    for _, loan in df.iterrows():
+
+        platform = loan["platform"]
+        program = loan["loan program"]
+        fico = loan["FICO Borrower"]
+        submit_date = loan["Submit Date"]
+        if isinstance(submit_date, str):
+            submit_date = pd.to_datetime(submit_date).date()
+
+
+        cutoff_row = cutoff_cfg[cutoff_cfg["platform"] == platform]
+
+        if cutoff_row.empty:
+            continue
+
+        cutoff = cutoff_row.iloc[0]
+        comap_id = (
+            cutoff["comap_id_post"]
+            if submit_date > cutoff["cutoff_date"]
+            else cutoff["comap_id_pre"]
+        )
+
+        eligible_rows = matrix[
+            (matrix["comap_id"] == comap_id) &
+            (matrix["platform"] == platform) &
+            (matrix["loan_program"] == program)
+        ]
+
+        if eligible_rows.empty:
+            continue  # program not governed by CoMAP
+
+        qualifies = eligible_rows[
+            (eligible_rows["fico_min"] <= fico) &
+            (eligible_rows["fico_max"] >= fico)
+        ]
+
+        if qualifies.empty:
+            severity = meta_cfg.loc[
+                meta_cfg["comap_id"] == comap_id, "severity"
+            ].iloc[0]
+
+            exceptions.append({
+                "SELLER Loan #": loan["SELLER Loan #"],
+                "rule_id": comap_id,
+                "exception_type": "COMAP",
+                "platform": platform,
+                "loan_program": program,
+                "fico": fico,
+                "severity": severity
+            })
+
+    return pd.DataFrame(exceptions)

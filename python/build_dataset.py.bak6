@@ -1,0 +1,304 @@
+import os
+import argparse
+from pathlib import Path
+from typing import Tuple
+
+import pandas as pd
+
+
+def _require_venv() -> None:
+    if os.environ.get("VIRTUAL_ENV") is None:
+        raise RuntimeError(
+            "Virtual environment is not activated. "
+            "Activate your venv before running the dataset builder."
+        )
+
+
+def _find_header_row(raw: pd.DataFrame, marker: str = "SELLER Loan #", max_scan_rows: int = 40) -> int:
+    scan = raw.head(max_scan_rows)
+    for i in range(len(scan)):
+        row = scan.iloc[i].astype(str).fillna("")
+        if (row == marker).any():
+            return i
+    raise ValueError(f"Could not find header row containing marker '{marker}' in first {max_scan_rows} rows.")
+
+
+def _clean_exhibit_a(excel_path: str, platform: str) -> pd.DataFrame:
+    """
+    Load an Exhibit A Excel file with robust header detection and cleanup.
+
+    Handles:
+    - Header rows with blank / NaN cells
+    - Trailing empty columns
+    - Extra rows above the true header
+    """
+
+    raw = pd.read_excel(excel_path, header=None)
+
+    header_row = _find_header_row(raw, marker="SELLER Loan #")
+
+    # Extract header row and clean it
+    raw_headers = raw.iloc[header_row].tolist()
+
+    headers = []
+    seen_empty = 0
+    for h in raw_headers:
+        # Normalize header cell
+        if h is None or (isinstance(h, float) and pd.isna(h)):
+            seen_empty += 1
+            headers.append(f"unnamed_{seen_empty}")
+        else:
+            hs = str(h).strip()
+            if hs == "":
+                seen_empty += 1
+                headers.append(f"unnamed_{seen_empty}")
+            else:
+                headers.append(hs)
+
+    # Build dataframe below header
+    df = raw.iloc[header_row + 1 :].copy()
+    df.columns = headers
+
+    # Drop fully empty rows
+    df = df.dropna(how="all").reset_index(drop=True)
+
+    # Drop fully empty columns
+    df = df.dropna(axis=1, how="all")
+
+    # Validate required column
+    if "SELLER Loan #" not in df.columns:
+        raise KeyError(
+            f"'{excel_path}' did not produce a 'SELLER Loan #' column after header detection.\n"
+            f"Detected columns: {list(df.columns)}"
+        )
+
+    # Remove rows without a loan number
+    df = df[df["SELLER Loan #"].notna()].copy()
+
+    # Attach platform
+    df["Platform"] = platform
+
+    return df
+
+def _normalize_colname(df: pd.DataFrame, preferred: str, candidates: Tuple[str, ...]) -> str:
+    """
+    Return the existing column name that matches preferred/candidates case-insensitively.
+
+    Robust to Excel headers that contain blanks (NaN -> float) by stringifying safely.
+    """
+    cols_lower = {}
+    for c in df.columns:
+        if c is None:
+            continue
+        # Pandas will store blank header cells as NaN (float)
+        if isinstance(c, float) and pd.isna(c):
+            continue
+        cs = str(c).strip()
+        if cs == "" or cs.lower() == "nan":
+            continue
+        cols_lower[cs.lower()] = cs
+
+    pref = preferred.strip().lower()
+    if pref in cols_lower:
+        return cols_lower[pref]
+
+    for cand in candidates:
+        cand_l = str(cand).strip().lower()
+        if cand_l in cols_lower:
+            return cols_lower[cand_l]
+
+    raise KeyError(f"Missing required column. Tried: {preferred} / {candidates}. Found: {list(df.columns)}")
+
+
+def _apply_notes_suffix(df: pd.DataFrame) -> pd.DataFrame:
+    app_type_col = _normalize_colname(df, "Application Type", ("application_type",))
+    program_col = _normalize_colname(
+        df,
+        "Loan Program",
+        ("loan program", "Loan Program Name", "Program", "loan_program"),
+    )
+
+    df[program_col] = df[program_col].astype("string")
+    mask = df[app_type_col].astype("string").str.upper() == "HD NOTE"
+    df.loc[mask, program_col] = df.loc[mask, program_col] + "notes"
+    return df
+
+
+def _load_master_combined(master_path: str, notes_path: str) -> pd.DataFrame:
+    master = pd.read_excel(master_path)
+    notes = pd.read_excel(notes_path)
+
+    master_prog = _normalize_colname(master, "loan program", ("Loan Program", "Loan Program Name", "Program"))
+    notes_prog = _normalize_colname(notes, "loan program", ("Loan Program", "Loan Program Name", "Program"))
+
+    notes[notes_prog] = notes[notes_prog].astype("string") + "notes"
+    return pd.concat([master, notes], ignore_index=True)
+
+
+def _parse_dates(df: pd.DataFrame) -> pd.DataFrame:
+    if "Submit Date" in df.columns:
+        df["Submit Date"] = pd.to_datetime(df["Submit Date"], errors="raise").dt.date
+
+    for col in ["Purchase_Date", "Purchase Date", "Monthly Payment Date"]:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
+
+    return df
+
+
+def _snake_case_output_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Convert canonical fields needed by rules into snake_case.
+    Only renames known columns; everything else is left as-is.
+    """
+    df = df.rename(
+        columns={
+            "SELLER Loan #": "seller_loan_no",
+            "Platform": "platform",
+            "Loan Program": "loan_program",
+            "Submit Date": "submit_date",
+            "FICO": "fico",
+            "FICO Borrower": "fico",
+            "Application Type": "application_type",
+            "Lender Price(%)": "lender_price_pct",
+            "Purchase Price": "purchase_price",
+            "Original Balance": "original_balance",
+            "Orig. Balance": "original_balance",
+            "State": "state",
+            "Term": "term",
+        }
+    )
+
+    # basic required columns for rules
+    required = ["seller_loan_no", "platform", "loan_program", "submit_date", "fico"]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise KeyError(
+            f"build_dataset output is missing required column(s): {missing}. "
+            f"Columns present: {list(df.columns)}"
+        )
+    return df
+
+
+def _derive_loan_type(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Create df['loan_type'] for eligibility_rules config filtering:
+      - 'standard', 'hybrid', 'ninp', etc.
+
+    This is the correct place to add loan_type: AFTER snake_case normalization,
+    so rules can rely on a consistent schema.
+    """
+    df = df.copy()
+
+    # Prefer a master-sheet derived field if it already exists
+    if "loan_type" in df.columns and df["loan_type"].notna().any():
+        df["loan_type"] = df["loan_type"].astype("string").str.strip().str.lower()
+        return df
+
+    lp = df["loan_program"].astype("string").str.lower()
+
+    df["loan_type"] = pd.NA
+    # Heuristic mappings (extend as you learn your programs)
+    df.loc[lp.str.contains(r"\bhybrid\b", na=False), "loan_type"] = "hybrid"
+    df.loc[lp.str.contains(r"\bninp\b|\bni np\b|\bno income\b", na=False), "loan_type"] = "ninp"
+    df.loc[lp.str.contains(r"\bstd\b|\bstandard\b|unsec std", na=False), "loan_type"] = "standard"
+
+    # If still null, default to "unknown" to avoid KeyErrors downstream
+    df["loan_type"] = df["loan_type"].fillna("unknown")
+    return df
+
+
+def _coerce_numeric(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Make sure numeric columns used by rules sum/compare correctly.
+    """
+    df = df.copy()
+    for col in ["fico", "term", "original_balance", "purchase_price", "lender_price_pct"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
+
+
+def build_dataset(
+    prime_exhibit_a: str,
+    sfy_exhibit_a: str,
+    master_sheet: str,
+    master_sheet_notes: str,
+    output_csv: str,
+) -> str:
+    prime_df = _clean_exhibit_a(prime_exhibit_a, platform="prime")
+    sfy_df = _clean_exhibit_a(sfy_exhibit_a, platform="sfy")
+
+    buy_df = pd.concat([prime_df, sfy_df], ignore_index=True)
+    buy_df = _apply_notes_suffix(buy_df)
+
+    master_df = _load_master_combined(master_sheet, master_sheet_notes)
+
+    # Merge keys
+    buy_prog = _normalize_colname(
+        buy_df,
+        "Loan Program",
+        ("loan program", "Loan Program Name", "Program", "loan_program"),
+    )
+    master_prog = _normalize_colname(master_df, "loan program", ("Loan Program", "Loan Program Name", "Program"))
+
+    buy_df["_loan_program_key"] = buy_df[buy_prog].astype("string").str.strip()
+    master_df["_loan_program_key"] = master_df[master_prog].astype("string").str.strip()
+
+    # Prefer merge on (Platform, loan program) if Platform exists in master
+    if "Platform" in master_df.columns:
+        merged = buy_df.merge(master_df, on=["Platform", "_loan_program_key"], how="left", suffixes=("", "_master"))
+    else:
+        merged = buy_df.merge(master_df, on="_loan_program_key", how="left", suffixes=("", "_master"))
+
+    merged = merged.drop(columns=["_loan_program_key"], errors="ignore")
+    merged = _parse_dates(merged)
+
+    # 🔑 Canonicalize names for rules
+    merged = _snake_case_output_columns(merged)
+
+    # 🔑 Add loan_type HERE (after snake_case so it’s deterministic)
+    merged = _derive_loan_type(merged)
+
+    # Helpful numeric coercions for ratio rules
+    merged = _coerce_numeric(merged)
+
+    out_path = Path(output_csv)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    merged.to_csv(out_path, index=False)
+    return str(out_path)
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description="Build unified dataset CSV for loan rules engine input.")
+
+    p.add_argument("--prime-exhibit-a", required=True, help="Path to Prime Exhibit A Excel file")
+    p.add_argument("--sfy-exhibit-a", required=True, help="Path to SFY Exhibit A Excel file")
+    p.add_argument("--master-sheet", required=True, help="Path to MASTER_SHEET.xlsx")
+    p.add_argument("--master-sheet-notes", required=True, help="Path to MASTER_SHEET - Notes.xlsx")
+    p.add_argument("--output-csv", required=True, help="Output CSV path for run_engine.py input")
+
+    return p.parse_args()
+
+
+def main():
+    args = parse_args()
+    _require_venv()
+
+    for pth in [args.prime_exhibit_a, args.sfy_exhibit_a, args.master_sheet, args.master_sheet_notes]:
+        if not Path(pth).exists():
+            raise FileNotFoundError(f"Input file not found: {pth}")
+
+    out_csv = build_dataset(
+        prime_exhibit_a=args.prime_exhibit_a,
+        sfy_exhibit_a=args.sfy_exhibit_a,
+        master_sheet=args.master_sheet,
+        master_sheet_notes=args.master_sheet_notes,
+        output_csv=args.output_csv,
+    )
+
+    print(f"Built dataset CSV: {out_csv}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,8 @@
+React → API Contract (Quick Reference)
+Screen	Endpoint
+Run list	GET /api/runs
+Run status	GET /api/runs/:runId/status
+Summary KPIs	GET /api/summary/:runId
+Exceptions grid	GET /api/exceptions?runId=...
+Loan detail	GET /api/loan/:runId/:loanNo
+Eligibility	GET /api/portfolio-exceptions/:runId

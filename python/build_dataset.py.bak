@@ -1,0 +1,112 @@
+import sys
+import os
+from pathlib import Path
+import argparse
+import logging
+from typing import Optional, Tuple
+
+import pandas as pd
+
+# --------------------------------------------------
+# Ensure project root is on sys.path
+# --------------------------------------------------
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+
+def _find_header_row(df: pd.DataFrame, marker: str = "SELLER Loan #", max_scan_rows: int = 30) -> int:
+    """
+    Heuristic: find the row index containing `marker` anywhere.
+    Exhibit A sheets often have a few title rows before the real header.
+    """
+    scan = df.head(max_scan_rows)
+    for i in range(len(scan)):
+        row = scan.iloc[i].astype(str).fillna("")
+        if (row == marker).any():
+            return i
+    raise ValueError(f"Could not find header row containing marker '{marker}' in first {max_scan_rows} rows.")
+
+
+def _clean_exhibit_a(excel_path: str, platform: str) -> pd.DataFrame:
+    """
+    Read Exhibit A with header detection and basic cleanup.
+    """
+    raw = pd.read_excel(excel_path, header=None)
+    header_row = _find_header_row(raw, marker="SELLER Loan #")
+
+    headers = raw.iloc[header_row].tolist()
+    df = raw.iloc[header_row + 1 :].copy()
+    df.columns = headers
+
+    # Drop completely empty rows
+    df = df.dropna(how="all").reset_index(drop=True)
+
+    # Add platform column consistent with notebook usage
+    df["Platform"] = platform
+
+    return df
+
+
+def _normalize_colname(df: pd.DataFrame, preferred: str, candidates: Tuple[str, ...]) -> str:
+    """
+    Return the existing column name that matches preferred/candidates case-insensitively.
+    """
+    cols_lower = {c.lower(): c for c in df.columns}
+    if preferred.lower() in cols_lower:
+        return cols_lower[preferred.lower()]
+    for cand in candidates:
+        if cand.lower() in cols_lower:
+            return cols_lower[cand.lower()]
+    raise KeyError(f"Missing required column. Tried: {preferred} / {candidates}. Found: {list(df.columns)}")
+
+
+def _apply_notes_suffix(buy_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    If Application Type == 'HD NOTE', append 'notes' to loan program (notebook behavior).
+    """
+    app_type_col = _normalize_colname(buy_df, "Application Type", ("application_type",))
+    program_col = _normalize_colname(
+        buy_df,
+        "Loan Program",
+        ("loan program", "Loan Program Name", "Program", "loan_program"),
+    )
+
+    # Convert to string, preserve NaNs
+    buy_df[program_col] = buy_df[program_col].astype("string")
+
+    mask = buy_df[app_type_col].astype("string").str.upper() == "HD NOTE"
+    buy_df.loc[mask, program_col] = buy_df.loc[mask, program_col] + "notes"
+    return buy_df
+
+
+def _load_master_combined(master_path: str, notes_path: str) -> pd.DataFrame:
+    """
+    Load MASTER_SHEET.xlsx and MASTER_SHEET - Notes.xlsx, and normalize notes loan programs.
+    """
+    master = pd.read_excel(master_path)
+    notes = pd.read_excel(notes_path)
+
+    # Normalize loan program column name for both
+    master_prog = _normalize_colname(master, "loan program", ("Loan Program", "Loan Program Name", "Program"))
+    notes_prog = _normalize_colname(notes, "loan program", ("Loan Program", "Loan Program Name", "Program"))
+
+    # Notebook: notes loan programs get 'notes' suffix
+    notes[notes_prog] = notes[notes_prog].astype("string") + "notes"
+
+    # Normalize platform column if present (some master sheets use different naming)
+    # We keep as-is and merge with buy_df using Platform/loan program where available.
+    combined = pd.concat([master, notes], ignore_index=True)
+    return combined
+
+
+def _parse_dates(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Parse common date fields. (Critical: Submit Date must become date for CoMAP cutoff compares.)
+    """
+    for col in ["Submit Date", "Purchase_Date", "Purchase Date", "Monthly Payment Date"]:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
+    return df
+
+
+def build_dat_

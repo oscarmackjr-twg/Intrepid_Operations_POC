@@ -1,0 +1,30 @@
+// backend/server.ts
+import "dotenv/config";
+import http from "http";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// IMPORTANT: in ESM + ts-node, import the TS module explicitly
+import app from "./app.ts";
+
+const PORT = Number(process.env.PORT || 3001);
+
+process.on("unhandledRejection", (reason: any) => {
+  console.error("UNHANDLED REJECTION:");
+  console.error(reason);
+});
+
+process.on("uncaughtException", (err: any) => {
+  console.error("UNCAUGHT EXCEPTION:");
+  console.error(err);
+  process.exit(1);
+});
+
+const server = http.createServer(app);
+
+server.listen(PORT, () => {
+  console.log(`Backend listening on http://localhost:${PORT} (NODE_ENV=${process.env.NODE_ENV})`);
+});

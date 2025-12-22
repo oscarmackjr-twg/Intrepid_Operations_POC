@@ -1,0 +1,46 @@
+def load_purchase_price_rule(engine, as_of_date):
+    query = """
+        SELECT *
+        FROM rule_purchase_price_config
+        WHERE enabled = TRUE
+          AND (effective_start_date IS NULL OR effective_start_date <= :dt)
+          AND (effective_end_date IS NULL OR effective_end_date >= :dt)
+    """
+    return pd.read_sql(query, engine, params={"dt": as_of_date}).iloc[0].to_dict()
+
+
+# rules/config_loader.py
+
+def load_eligibility_rules(engine, as_of_date):
+    query = """
+        SELECT *
+        FROM rule_eligibility_config
+        WHERE enabled = TRUE
+    """
+    return pd.read_sql(query, engine)
+
+
+
+def load_comap_config():
+    ratio_cfg = {
+        "Prime + SPY": {
+            "min_ratio": 0.35,
+            "max_ratio": 0.55
+        }
+    }
+
+    cutoff_cfg = {
+        "Prime + SPY": {
+            "min_fico": 700
+        }
+    }
+
+    meta_cfg = {
+        "product_map": {
+            "PRIME": "Prime + SPY",
+            "SPY": "Prime + SPY"
+        }
+    }
+
+    return ratio_cfg, cutoff_cfg, meta_cfg
+

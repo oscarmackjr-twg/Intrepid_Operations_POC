@@ -1,0 +1,15 @@
+// backend/server.ts
+import http from "http";
+
+// IMPORTANT (ESM + ts-node):
+// Use the TS extension so the ts-node ESM loader can resolve it on Windows.
+import app from "./app.ts";
+
+const port = Number(process.env.PORT || 3001);
+
+const server = http.createServer(app);
+
+server.listen(port, () => {
+  // eslint-disable-next-line no-console
+  console.log(`Backend listening on http://localhost:${port} (NODE_ENV=${process.env.NODE_ENV})`);
+});

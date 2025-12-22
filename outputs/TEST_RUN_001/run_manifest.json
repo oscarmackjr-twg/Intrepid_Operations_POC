@@ -1,0 +1,18 @@
+{
+  "run_id": "TEST_RUN_001",
+  "as_of_date": "2025-12-22",
+  "dry_run": true,
+  "artifacts": {
+    "engine_input_csv": "C:\\Users\\omack\\Intrepid\\pythonFramework\\loan_engine\\outputs\\TEST_RUN_001\\engine_input.csv",
+    "exceptions_csv": "C:\\Users\\omack\\Intrepid\\pythonFramework\\loan_engine\\outputs\\TEST_RUN_001\\exceptions.csv",
+    "ratios_xlsx": "C:\\Users\\omack\\Intrepid\\pythonFramework\\loan_engine\\outputs\\TEST_RUN_001\\ratios.xlsx"
+  },
+  "counts": {
+    "exceptions": 0,
+    "metrics": 0
+  },
+  "warnings": [
+    "No --db-url provided; skipping purchase price rules (config loader requires DB).",
+    "No --db-url provided; skipping eligibility rules (config loader requires DB)."
+  ]
+}

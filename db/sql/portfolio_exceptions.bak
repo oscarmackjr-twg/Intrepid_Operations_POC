@@ -1,0 +1,12 @@
+CREATE TABLE portfolio_exceptions (
+    run_id           UUID,
+    rule_id          VARCHAR,
+    exception_type   VARCHAR,
+    platform         VARCHAR,
+    severity         VARCHAR,
+    expected_value   DECIMAL,
+    actual_value     DECIMAL,
+    difference       DECIMAL,
+    balance_impact   DECIMAL,
+    created_at       TIMESTAMP
+);

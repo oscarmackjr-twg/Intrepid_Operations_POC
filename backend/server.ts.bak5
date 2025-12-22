@@ -1,0 +1,31 @@
+// backend/server.ts
+import app from "./app";
+import http from "http";
+
+const PORT = Number(process.env.PORT || 3001);
+
+// Simple health endpoint useful for E2E smoke checks
+app.get("/health", (_req, res) => {
+  res.status(200).json({ ok: true, env: process.env.NODE_ENV || "unknown" });
+});
+
+const server = http.createServer(app);
+
+server.listen(PORT, () => {
+  // eslint-disable-next-line no-console
+  console.log(`[backend] listening on http://localhost:${PORT} (NODE_ENV=${process.env.NODE_ENV})`);
+});
+
+// Helpful diagnostics in test runs
+process.on("unhandledRejection", (err) => {
+  // eslint-disable-next-line no-console
+  console.error("[backend] unhandledRejection", err);
+  process.exitCode = 1;
+});
+process.on("uncaughtException", (err) => {
+  // eslint-disable-next-line no-console
+  console.error("[backend] uncaughtException", err);
+  process.exitCode = 1;
+});
+
+export default server;

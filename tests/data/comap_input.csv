@@ -1,0 +1,7 @@
+SELLER Loan #,platform,loan program,FICO Borrower,Submit Date,Orig. Balance,type,Term
+L1,prime,Unsec Std - 999 - 120,680,2024-06-01,100000,standard,120
+L2,prime,Unsec Std - 999 - 120,720,2024-06-01,200000,standard,120
+L3,prime,Unsec Std - 999 - 120,750,2024-06-01,150000,standard,120
+L4,sfy,SFY Hybrid,650,2024-07-01,175000,hybrid,144
+L5,sfy,SFY Hybrid,710,2024-07-01,225000,hybrid,144
+L6,notes,Notes Program A,690,2024-05-15,50000,standard,60

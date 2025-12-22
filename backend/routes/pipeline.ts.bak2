@@ -1,0 +1,196 @@
+import { Router, Request, Response } from "express";
+import { spawn } from "child_process";
+import path from "path";
+import fs from "fs";
+
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const router = Router();
+
+/**
+ * Expected request body.
+ * Paths must be server-side paths (not browser-local paths).
+ */
+type RunPipelineBody = {
+  runId: string;
+
+  primeExhibitA: string;
+  sfyExhibitA: string;
+  masterSheet: string;
+  masterSheetNotes: string;
+
+  tapeCsv?: string;
+  fx3Csv?: string;
+  fx4Csv?: string;
+
+  outputDir: string;
+  dryRun?: boolean;
+};
+
+function exists(p: string): boolean {
+  try {
+    return fs.existsSync(p);
+  } catch {
+    return false;
+  }
+}
+
+router.post("/run", async (req: Request, res: Response) => {
+  const body = req.body as Partial<RunPipelineBody>;
+
+  const required = [
+    "runId",
+    "primeExhibitA",
+    "sfyExhibitA",
+    "masterSheet",
+    "masterSheetNotes",
+    "outputDir",
+  ] as const;
+
+  const missing = required.filter((k) => !body[k]);
+  if (missing.length) {
+    return res.status(400).json({
+      error: "Missing required fields",
+      missing,
+    });
+  }
+
+  const {
+    runId,
+    primeExhibitA,
+    sfyExhibitA,
+    masterSheet,
+    masterSheetNotes,
+    tapeCsv,
+    fx3Csv,
+    fx4Csv,
+    outputDir,
+    dryRun,
+  } = body as RunPipelineBody;
+
+  // Validate server-side file existence
+  const pathsToCheck: [string, string | undefined][] = [
+    ["primeExhibitA", primeExhibitA],
+    ["sfyExhibitA", sfyExhibitA],
+    ["masterSheet", masterSheet],
+    ["masterSheetNotes", masterSheetNotes],
+    ["tapeCsv", tapeCsv],
+    ["fx3Csv", fx3Csv],
+    ["fx4Csv", fx4Csv],
+  ];
+
+  const missingFiles = pathsToCheck
+    .filter(([, p]) => p && !exists(p))
+    .map(([name, p]) => ({ name, path: p }));
+
+  if (missingFiles.length) {
+    return res.status(400).json({
+      error: "One or more input files do not exist on the server",
+      missingFiles,
+    });
+  }
+
+  // Python interpreter (use venv if configured)
+  const pythonExe = process.env.PYTHON_EXE || "python";
+
+  // Repo root = loan_engine/
+  const repoRoot = path.resolve(__dirname, "..", "..");
+
+  const scriptPath = path.join(repoRoot, "python", "run_pipeline.py");
+
+  if (!exists(scriptPath)) {
+    return res.status(500).json({
+      error: "run_pipeline.py not found",
+      scriptPath,
+      repoRoot,
+    });
+  }
+
+  const args: string[] = [
+    scriptPath,
+    "--run-id",
+    runId,
+    "--prime-exhibit-a",
+    primeExhibitA,
+    "--sfy-exhibit-a",
+    sfyExhibitA,
+    "--master-sheet",
+    masterSheet,
+    "--master-sheet-notes",
+    masterSheetNotes,
+    "--output-dir",
+    outputDir,
+  ];
+
+  if (tapeCsv) {
+    args.push("--tape", tapeCsv);
+  }
+  if (fx3Csv) {
+    args.push("--fx3", fx3Csv);
+  }
+  if (fx4Csv) {
+    args.push("--fx4", fx4Csv);
+  }
+  if (dryRun) {
+    args.push("--dry-run");
+  }
+
+  const proc = spawn(pythonExe, args, {
+    cwd: repoRoot,
+    env: process.env,
+    windowsHide: true,
+  });
+
+  let stdout = "";
+  let stderr = "";
+
+  proc.stdout.on("data", (d) => (stdout += d.toString()));
+  proc.stderr.on("data", (d) => (stderr += d.toString()));
+
+  proc.on("error", (err) => {
+    return res.status(500).json({
+      error: "Failed to start pipeline",
+      details: String(err),
+      pythonExe,
+      args,
+    });
+  });
+
+  proc.on("close", (code) => {
+    if (code !== 0) {
+      return res.status(500).json({
+        error: "Pipeline execution failed",
+        exitCode: code,
+        stdout,
+        stderr,
+      });
+    }
+
+    // Expected artifacts written by run_pipeline.py
+    const artifacts = {
+      engineInputCsv: path.join(outputDir, "engine_input.csv"),
+      borrowingFile: path.join(outputDir, "borrowing_file.csv"),
+      ratiosXlsx: path.join(outputDir, "ratios.xlsx"),
+      exceptionsCsv: path.join(outputDir, "exceptions.csv"),
+      manifest: path.join(outputDir, "run_manifest.json"),
+    };
+
+    // Count rows if files exist
+    const exceptionCount = exists(artifacts.exceptionsCsv)
+      ? fs.readFileSync(artifacts.exceptionsCsv, "utf8").split("\n").length - 1
+      : 0;
+
+    return res.json({
+      runId,
+      artifacts,
+      exceptionCount,
+      stdout,
+      stderr,
+    });
+  });
+});
+
+export default router;

@@ -1,0 +1,138 @@
+# rules/eligibility.py
+from __future__ import annotations
+
+import pandas as pd
+
+
+def _to_snake(s: str) -> str:
+    # minimal snake-case normalizer for config column references
+    return (
+        str(s)
+        .strip()
+        .lower()
+        .replace("%", "pct")
+        .replace(".", "")
+        .replace("(", "")
+        .replace(")", "")
+        .replace("/", "_")
+        .replace("-", "_")
+        .replace(" ", "_")
+    )
+
+
+def eligibility_rules(df: pd.DataFrame, rules_cfg: pd.DataFrame) -> pd.DataFrame:
+    """
+    Portfolio-level eligibility ratio checks.
+
+    Assumes df is normalized to snake_case.
+    Expected df columns used by filters:
+      - platform
+      - term (optional, if term-based rules exist)
+      - fico (optional, if fico-based rules exist)
+      - type (optional, if your dataset defines 'type'; otherwise configure to use loan_program/application_type)
+
+    rules_cfg expected columns:
+      - rule_id, platform, severity, max_ratio
+      - loan_type (optional)
+      - min_term, max_term (optional)
+      - fico_threshold (optional)
+      - balance_column (required): name of numeric balance column (will be normalized to snake_case)
+    """
+    exceptions: list[dict] = []
+
+    if rules_cfg is None or rules_cfg.empty:
+        return pd.DataFrame()
+
+    # Ensure df columns are stripped (don’t force full lowercase here—pipeline should do that)
+    df = df.copy()
+    df.columns = [str(c).strip() for c in df.columns]
+
+    for _, rule in rules_cfg.iterrows():
+        platform = rule.get("platform")
+        if pd.isna(platform):
+            continue
+
+        scope = df[df["platform"] == platform].copy()
+        if scope.empty:
+            continue
+
+        # Optional filters (use pd.notna so 0 values work)
+        loan_type = rule.get("loan_type")
+        if pd.notna(loan_type) and str(loan_type).strip() != "":
+            # NOTE: if your dataset does not have a 'type' column, change config to refer to something else,
+            # or update this to use loan_program/application_type.
+            if "type" not in scope.columns:
+                raise KeyError(
+                    f"Eligibility rule {rule.get('rule_id')} requires df['type'] but column is missing. "
+                    f"Available columns: {list(scope.columns)}"
+                )
+            scope = scope[scope["type"] == loan_type]
+
+        min_term = rule.get("min_term")
+        if pd.notna(min_term):
+            if "term" not in scope.columns:
+                raise KeyError(
+                    f"Eligibility rule {rule.get('rule_id')} uses min_term but df['term'] is missing."
+                )
+            scope = scope[scope["term"] >= int(min_term)]
+
+        max_term = rule.get("max_term")
+        if pd.notna(max_term):
+            if "term" not in scope.columns:
+                raise KeyError(
+                    f"Eligibility rule {rule.get('rule_id')} uses max_term but df['term'] is missing."
+                )
+            scope = scope[scope["term"] <= int(max_term)]
+
+        fico_threshold = rule.get("fico_threshold")
+        if pd.notna(fico_threshold):
+            if "fico" not in scope.columns:
+                raise KeyError(
+                    f"Eligibility rule {rule.get('rule_id')} uses fico_threshold but df['fico'] is missing."
+                )
+            scope = scope[scope["fico"] < float(fico_threshold)]
+
+        balance_column_raw = rule.get("balance_column")
+        if pd.isna(balance_column_raw) or str(balance_column_raw).strip() == "":
+            raise ValueError(f"Eligibility rule {rule.get('rule_id')} is missing balance_column")
+
+        balance_col = _to_snake(balance_column_raw)
+
+        if balance_col not in df.columns:
+            raise KeyError(
+                f"Eligibility rule {rule.get('rule_id')} references balance_column='{balance_column_raw}' "
+                f"(normalized to '{balance_col}') but df column is missing. "
+                f"Available columns: {list(df.columns)}"
+            )
+
+        numerator = scope[balance_col].fillna(0).sum()
+
+        # Denominator: platform-only pool (matches your original logic)
+        denom_scope = df[df["platform"] == platform]
+        denominator = denom_scope[balance_col].fillna(0).sum()
+
+        if denominator == 0:
+            continue
+
+        ratio = float(numerator) / float(denominator)
+
+        max_ratio = rule.get("max_ratio")
+        if pd.isna(max_ratio):
+            continue
+
+        if ratio > float(max_ratio):
+            exceptions.append(
+                {
+                    "rule_id": rule.get("rule_id"),
+                    "exception_type": "ELIGIBILITY_RATIO",
+                    "platform": platform,
+                    "severity": rule.get("severity"),
+                    "actual_value": round(ratio, 4),
+                    "expected_value": float(max_ratio),
+                    "difference": round(ratio - float(max_ratio), 4),
+                    "balance_impact": float(numerator),
+                    "balance_column": balance_col,
+                }
+            )
+
+    return pd.DataFrame(exceptions)

@@ -1,0 +1,155 @@
+import sys
+import os
+from pathlib import Path
+import argparse
+import logging
+
+# --------------------------------------------------
+# Ensure project root is on sys.path
+# --------------------------------------------------
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+# --------------------------------------------------
+# Virtualenv guard (prevents silent failures)
+# --------------------------------------------------
+if os.environ.get("VIRTUAL_ENV") is None:
+    raise RuntimeError(
+        "Virtual environment is not activated. "
+        "Activate venv before running run_engine.py"
+    )
+
+# --------------------------------------------------
+# Imports (now safe)
+# --------------------------------------------------
+import pandas as pd
+from sqlalchemy import create_engine
+
+from rules.engine import run_comap_rules
+from rules.config_loader import load_comap_config
+
+
+# --------------------------------------------------
+# Argument parsing
+# --------------------------------------------------
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Loan Review Rule Engine"
+    )
+
+    parser.add_argument(
+        "--run-id",
+        required=True,
+        help="Unique run identifier passed from Node"
+    )
+
+    parser.add_argument(
+        "--input-csv",
+        default="tests/data/comap_input.csv",
+        help="Input CSV file path"
+    )
+
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run rules without writing to the database"
+    )
+
+    return parser.parse_args()
+
+
+# --------------------------------------------------
+# Logging setup
+# --------------------------------------------------
+def setup_logging():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s"
+    )
+
+
+# --------------------------------------------------
+# Main execution
+# --------------------------------------------------
+def main():
+    setup_logging()
+    args = parse_args()
+
+    run_id = args.run_id
+    input_csv = args.input_csv
+    dry_run = args.dry_run
+
+    logging.info("Starting rule engine")
+    logging.info("Run ID: %s", run_id)
+    logging.info("Input CSV: %s", input_csv)
+    logging.info("Dry run: %s", dry_run)
+
+    # --------------------------------------------------
+    # Load input data
+    # --------------------------------------------------
+    if not os.path.exists(input_csv):
+        raise FileNotFoundError(f"Input CSV not found: {input_csv}")
+
+    loans_df = pd.read_csv(input_csv)
+    loans_df["Submit Date"] = pd.to_datetime(loans_df["Submit Date"], errors="raise").dt.date
+    logging.info("Loaded %d loans", len(loans_df))
+
+    # --------------------------------------------------
+    # Load rule configuration
+    # --------------------------------------------------
+    
+    #config = load_comap_config()
+    #cutoff_cfg, meta_cfg = load_comap_config()
+    ratio_cfg, cutoff_cfg, meta_cfg = load_comap_config()
+
+
+
+    logging.info("Loaded CoMAP configuration")
+
+    # --------------------------------------------------
+    # Run rules
+    # --------------------------------------------------
+    #exceptions_df = run_comap_rules(loans_df, config)
+    #exceptions_df = run_comap_rules(loans_df, cutoff_cfg, meta_cfg)
+    exceptions_df = run_comap_rules(
+    loans_df,
+    ratio_cfg,
+    cutoff_cfg,
+    meta_cfg
+    )
+
+
+    logging.info("Generated %d exceptions", len(exceptions_df))
+
+    if dry_run:
+        logging.info("Dry run enabled — skipping database write")
+        print(exceptions_df)
+        return
+
+    # --------------------------------------------------
+    # Persist results
+    # --------------------------------------------------
+    db_url = os.environ.get("TEST_DB_URL")
+    if not db_url:
+        raise RuntimeError("TEST_DB_URL environment variable not set")
+
+    engine = create_engine(db_url)
+
+    with engine.begin() as conn:
+        exceptions_df["run_id"] = run_id
+        exceptions_df.to_sql(
+            "loan_exceptions",
+            conn,
+            if_exists="append",
+            index=False
+        )
+
+    logging.info("Exceptions persisted successfully")
+    logging.info("Run completed")
+
+
+# --------------------------------------------------
+# Entry point
+# --------------------------------------------------
+if __name__ == "__main__":
+    main()

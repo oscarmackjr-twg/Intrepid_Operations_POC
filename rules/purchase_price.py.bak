@@ -1,0 +1,58 @@
+import pandas as pd
+from decimal import Decimal, ROUND_HALF_UP
+
+def purchase_price_rule(df: pd.DataFrame, rule_cfg: dict) -> pd.DataFrame:
+    """
+    Validates lender price vs modeled purchase price.
+
+    Parameters
+    ----------
+    df : DataFrame
+        Enriched loan dataframe
+    rule_cfg : dict
+        Configuration row from rule_purchase_price_config
+
+    Returns
+    -------
+    DataFrame
+        Exception records only
+    """
+
+    tolerance = Decimal(rule_cfg["tolerance_bps"]) / Decimal(100)
+
+    expected_price = (
+        df["modeled_purchase_price"]
+        .astype(float)
+        .mul(100)
+        .round(2)
+    )
+
+    actual_price = df["Lender Price(%)"].astype(float).round(2)
+
+    price_diff = (actual_price - expected_price).abs()
+
+    failed = price_diff > float(tolerance)
+
+    exceptions = df.loc[failed].copy()
+
+    if exceptions.empty:
+        return pd.DataFrame()
+
+    exceptions["rule_id"] = rule_cfg["rule_id"]
+    exceptions["exception_type"] = "PURCHASE_PRICE"
+    exceptions["severity"] = rule_cfg["severity"]
+    exceptions["expected_value"] = expected_price.loc[failed]
+    exceptions["actual_value"] = actual_price.loc[failed]
+    exceptions["difference"] = price_diff.loc[failed]
+
+    return exceptions[[
+        "SELLER Loan #",
+        "rule_id",
+        "exception_type",
+        "severity",
+        "expected_value",
+        "actual_value",
+        "difference",
+        "Orig. Balance",
+        "Purchase Price"
+    ]]

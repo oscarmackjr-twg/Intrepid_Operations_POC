@@ -1,0 +1,30 @@
+{
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/app.js",
+    "start:dev": "cross-env NODE_ENV=development node --import \"data:text/javascript,import { register } from 'node:module'; import { pathToFileURL } from 'node:url'; register('ts-node/esm', pathToFileURL('./'));\" backend/server.ts",
+    "start:testDefault": "NODE_ENV=test ts-node backend/app.ts",
+    "start:testUpdated": "cross-env NODE_ENV=test ts-node backend/app.ts",
+    "start:testUpdate2": "cross-env NODE_ENV=test node --loader ts-node/esm backend/app.ts",
+    "start:testUpdate3": "cross-env NODE_ENV=test ts-node --esm backend/server.ts",
+    "start:testUpdate4": "cross-env NODE_ENV=test PORT=3001 ts-node --esm backend/server.ts",
+    "start:testUpdate5": "cross-env NODE_ENV=test node --loader ts-node/esm backend/server.ts",
+    "start:testUpdate6": "cross-env NODE_ENV=test node --trace-uncaught --trace-warnings --loader ts-node/esm backend/server.ts",
+    "start:testUpdate7": "cross-env NODE_ENV=test node --import \"data:text/javascript,import { register } from 'node:module'; import { pathToFileURL } from 'node:url'; register('ts-node/esm', pathToFileURL('./'));\" backend/server.ts",
+    "start:test": "cross-env NODE_ENV=test PORT=3001 tsx backend/server.ts",
+    "test": "jest"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "cross-env": "^10.1.0",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.21.0"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "pg": "^8.16.3",
+    "sqlalchemy": "^10.1.1",
+    "uuid": "^13.0.0"
+  }
+}

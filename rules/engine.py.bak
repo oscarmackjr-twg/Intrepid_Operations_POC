@@ -1,0 +1,27 @@
+from rules.purchase_price import purchase_price_rule
+from rules.config_loader import load_purchase_price_rule
+
+def run_purchase_price_rules(df, ctx, engine):
+    cfg = load_purchase_price_rule(engine, ctx.as_of_date)
+    return purchase_price_rule(df, cfg)
+
+
+
+# rules/engine.py
+
+from rules.eligibility import eligibility_rules
+from rules.config_loader import load_eligibility_rules
+
+def run_eligibility_rules(df, ctx, engine):
+    rules_cfg = load_eligibility_rules(engine, ctx.as_of_date)
+    return eligibility_rules(df, rules_cfg)
+
+
+from rules.comap import comap_rules
+
+def run_comap_rules(df, config):
+    """
+    Orchestrates CoMAP rule execution.
+    Returns a DataFrame of loan-level exceptions.
+    """
+    return comap_rules(df, config)

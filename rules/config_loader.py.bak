@@ -1,0 +1,21 @@
+def load_purchase_price_rule(engine, as_of_date):
+    query = """
+        SELECT *
+        FROM rule_purchase_price_config
+        WHERE enabled = TRUE
+          AND (effective_start_date IS NULL OR effective_start_date <= :dt)
+          AND (effective_end_date IS NULL OR effective_end_date >= :dt)
+    """
+    return pd.read_sql(query, engine, params={"dt": as_of_date}).iloc[0].to_dict()
+
+
+# rules/config_loader.py
+
+def load_eligibility_rules(engine, as_of_date):
+    query = """
+        SELECT *
+        FROM rule_eligibility_config
+        WHERE enabled = TRUE
+    """
+    return pd.read_sql(query, engine)
+

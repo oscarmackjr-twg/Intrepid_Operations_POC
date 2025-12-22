@@ -1,0 +1,135 @@
+from pathlib import Path
+import sys
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+
+import os
+import sys
+import argparse
+from datetime import datetime
+from pathlib import Path
+
+import pandas as pd
+from sqlalchemy import create_engine
+
+from rules.engine import run_comap_rules
+from rules.config_loader import load_comap_config
+
+
+def _require_venv():
+    # Keep the same safety behavior you had earlier in your original engine:
+    # This prevents running with the wrong interpreter/environment.
+    if os.environ.get("VIRTUAL_ENV") is None:
+        raise RuntimeError(
+            "Virtual environment is not activated. "
+            "Activate your venv before running the engine."
+        )
+
+
+def _parse_submit_date(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    CoMAP compares 'Submit Date' against datetime.date cutoffs.
+    Ensure it's a python date (not a string, not a Timestamp).
+    """
+    if "Submit Date" not in df.columns:
+        raise KeyError("Input data is missing required column: 'Submit Date'")
+
+    df["Submit Date"] = pd.to_datetime(df["Submit Date"], errors="raise").dt.date
+    return df
+
+
+def _rename_for_db(exceptions_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Your attached script renames 'SELLER Loan #' -> 'seller_loan_no' before writing. :contentReference[oaicite:1]{index=1}
+    Keep that behavior, but only if the column exists.
+    """
+    if "SELLER Loan #" in exceptions_df.columns:
+        exceptions_df = exceptions_df.rename(columns={"SELLER Loan #": "seller_loan_no"})
+    return exceptions_df
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description="Loan rules engine runner")
+
+    p.add_argument("--run-id", required=True, help="Unique run identifier (e.g. TEST_RUN_001)")
+    p.add_argument(
+        "--input-csv",
+        required=True,
+        help="Path to the prepared engine input CSV (e.g. outputs/engine_input.csv)",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run rules but do not write exceptions to the database",
+    )
+
+    # DB connectivity
+    p.add_argument(
+        "--db-url",
+        default=os.environ.get("LOAN_ENGINE_DB_URL", "postgresql://localhost/loan_test"),
+        help="SQLAlchemy database URL (or set LOAN_ENGINE_DB_URL)",
+    )
+
+    return p.parse_args()
+
+
+def main():
+    args = parse_args()
+    _require_venv()
+
+    input_path = Path(args.input_csv)
+    if not input_path.exists():
+        raise FileNotFoundError(f"Input CSV not found: {input_path}")
+
+    # Load the prepared input dataset
+    df = pd.read_csv(input_path)
+
+    # Fix for your observed error: str vs datetime.date
+    df = _parse_submit_date(df)
+
+    # Load CoMAP configuration as DataFrames (matches rules/comap.py expectations)
+    matrix_df, cutoff_df, meta_df = load_comap_config()
+
+    ### Temp Debug
+    #
+    print("matrix columns:", list(matrix_df.columns))
+    print("cutoff columns:", list(cutoff_df.columns))
+    print("meta columns:", list(meta_df.columns))
+    #
+    # End Debug
+
+    # Run CoMAP rules through the engine wrapper
+    exceptions_df = run_comap_rules(df, matrix_df, cutoff_df, meta_df)
+
+    # Attach run_id
+    if exceptions_df is None or exceptions_df.empty:
+        print(f"[{args.run_id}] No exceptions found.")
+        return
+
+    exceptions_df["run_id"] = args.run_id
+
+    # DB column naming consistency (keep behavior from your attached script)
+    exceptions_df = _rename_for_db(exceptions_df)
+
+    if args.dry_run:
+        print(f"[{args.run_id}] DRY RUN: {len(exceptions_df)} exception(s) would be written.")
+        # Print a small sample to help debugging
+        print(exceptions_df.head(25).to_string(index=False))
+        return
+
+    # Persist results
+    engine = create_engine(args.db_url)
+
+    exceptions_df.to_sql(
+        "loan_exceptions",
+        engine,
+        if_exists="append",
+        index=False,
+    )
+
+    print(f"[{args.run_id}] Wrote {len(exceptions_df)} exception(s) to loan_exceptions.")
+
+
+if __name__ == "__main__":
+    main()

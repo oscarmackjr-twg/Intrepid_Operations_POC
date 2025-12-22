@@ -1,0 +1,119 @@
+from pathlib import Path
+import sys
+import os
+import argparse
+import json
+from datetime import date
+
+import pandas as pd
+from sqlalchemy import create_engine
+
+# Ensure repo root is importable (Windows-safe)
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+
+from pipeline.build_dataset import build_dataset
+from pipeline.tape import load_tape, tag_repurchases, apply_repurchases
+from pipeline.servicing import load_fx_trial_balance, reconcile_servicing
+from pipeline.export_borrowing import export_borrowing_file
+from pipeline.export_ratios import export_ratios_xlsx
+
+from rules.engine import run_comap_rules
+from rules.purchase_price import purchase_price_rules
+from rules.underwriting import underwriting_rules
+from rules.portfolio_metrics import compute_portfolio_metrics
+from rules.config_loader import load_comap_config
+
+
+def _require_venv():
+    if os.environ.get("VIRTUAL_ENV") is None:
+        raise RuntimeError(
+            "Virtual environment is not activated. "
+            "Activate your venv before running the pipeline."
+        )
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description="Full loan eligibility pipeline (notebook replacement)")
+
+    p.add_argument("--run-id", required=True)
+
+    p.add_argument("--prime-exhibit-a", required=True)
+    p.add_argument("--sfy-exhibit-a", required=True)
+    p.add_argument("--master-sheet", required=True)
+    p.add_argument("--master-sheet-notes", required=True)
+
+    p.add_argument("--tape", help="Tape20Loans CSV (optional)")
+    p.add_argument("--fx3", help="FX3 trial balance CSV (optional)")
+    p.add_argument("--fx4", help="FX4 trial balance CSV (optional)")
+
+    p.add_argument("--output-dir", required=True)
+    p.add_argument("--dry-run", action="store_true")
+
+    p.add_argument(
+        "--db-url",
+        default=os.environ.get("LOAN_ENGINE_DB_URL"),
+        help="Optional DB URL for persistence",
+    )
+
+    return p.parse_args()
+
+
+def main():
+    args = parse_args()
+    _require_venv()
+
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    artifacts = []
+    run_manifest = {
+        "run_id": args.run_id,
+        "started_at": date.today().isoformat(),
+        "artifacts": {},
+    }
+
+    # ---------------------------------------------------------
+    # 1) Build dataset (Exhibit A + masters)
+    # ---------------------------------------------------------
+    loans_df, dataset_artifacts = build_dataset(
+        prime_exhibit_a_path=args.prime_exhibit_a,
+        sfy_exhibit_a_path=args.sfy_exhibit_a,
+        master_sheet_path=args.master_sheet,
+        master_sheet_notes_path=args.master_sheet_notes,
+        output_csv_path=str(output_dir / "engine_input.csv"),
+    )
+
+    artifacts.extend(dataset_artifacts)
+    run_manifest["artifacts"]["engine_input_csv"] = str(output_dir / "engine_input.csv")
+
+    # ---------------------------------------------------------
+    # 2) Tape repurchase tagging (optional)
+    # ---------------------------------------------------------
+    if args.tape:
+        tape_df = load_tape(args.tape)
+        rep_df = tag_repurchases(tape_df)
+        loans_df = apply_repurchases(loans_df, rep_df)
+
+    # ---------------------------------------------------------
+    # 3) Servicing reconciliation (optional)
+    # ---------------------------------------------------------
+    if args.fx3 and args.fx4:
+        servicing_df = load_fx_trial_balance(args.fx3, args.fx4)
+        buckets = reconcile_servicing(
+            loans_df,
+            servicing_df,
+            cutoff_date=date.today(),
+        )
+
+        borrowing_path = export_borrowing_file(
+            buckets["check_final_df"],
+            str(output_dir / "borrowing_file.csv"),
+        )
+        run_manifest["artifacts"]["borrowing_file"] = borrowing_path
+
+        # Use reconciled loans going forward
+        loans_df = buckets["check_final_df"]
+
+    # ---------------------------------------------------------
+    # 4) Loan-level rules (purchase price, CoMAP, und

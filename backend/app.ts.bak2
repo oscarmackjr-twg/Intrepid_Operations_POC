@@ -1,0 +1,23 @@
+// backend/app.ts
+import express from "express";
+
+import runs from "./routes/runs.js";
+import summary from "./routes/summary.js";
+import exceptions from "./routes/exceptions.js";
+import loanDetail from "./routes/loanDetail.js";
+import portfolioExceptions from "./routes/portfolioExceptions.js";
+import dataset from "./routes/dataset.js";
+import pipeline from "./routes/pipeline.js";
+
+const app = express();
+app.use(express.json());
+
+app.use("/api/runs", runs);
+app.use("/api/summary", summary);
+app.use("/api/exceptions", exceptions);
+app.use("/api/loan", loanDetail);
+app.use("/api/portfolio-exceptions", portfolioExceptions);
+app.use("/api/dataset", dataset);
+app.use("/api/pipeline", pipeline);
+
+export default app;

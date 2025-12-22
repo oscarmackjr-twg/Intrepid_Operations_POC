@@ -1,0 +1,4 @@
+SELLER Loan #,rule_id,exception_type,platform,loan_program,fico,severity
+L1,PRIME_COMAP,COMAP,prime,Unsec Std - 999 - 120,680,HIGH
+L3,PRIME_COMAP,COMAP,prime,Unsec Std - 999 - 120,750,HIGH
+L4,SFY_COMAP,COMAP,sfy,SFY Hybrid,650,HIGH

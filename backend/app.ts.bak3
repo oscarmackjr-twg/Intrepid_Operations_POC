@@ -1,0 +1,21 @@
+// backend/server.ts
+import http from "http";
+import app from "./app.ts";
+
+import runs from "./routes/runs.ts";
+import summary from "./routes/summary.ts";
+import exceptions from "./routes/exceptions.ts";
+import loanDetail from "./routes/loanDetail.ts";
+import portfolioExceptions from "./routes/portfolioExceptions.ts";
+import dataset from "./routes/dataset.ts";
+import pipeline from "./routes/pipeline.ts";
+
+
+const PORT = Number(process.env.PORT || 3001);
+
+const server = http.createServer(app);
+
+server.listen(PORT, () => {
+  // eslint-disable-next-line no-console
+  console.log(`Backend listening on http://localhost:${PORT} (NODE_ENV=${process.env.NODE_ENV})`);
+});

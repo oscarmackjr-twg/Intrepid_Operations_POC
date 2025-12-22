@@ -1,0 +1,13 @@
+CREATE TABLE loan_exceptions (
+    run_id           UUID,
+    seller_loan_no   VARCHAR,
+    rule_id          VARCHAR,
+    exception_type   VARCHAR,
+    severity         VARCHAR,
+    expected_value   VARCHAR,
+    actual_value     VARCHAR,
+    difference       DECIMAL,
+    orig_balance     DECIMAL,
+    purchase_price   DECIMAL,
+    created_at       TIMESTAMP
+);

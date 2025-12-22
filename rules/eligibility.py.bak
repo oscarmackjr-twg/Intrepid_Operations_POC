@@ -1,0 +1,55 @@
+# rules/eligibility.py
+
+import pandas as pd
+
+def eligibility_rules(df: pd.DataFrame, rules_cfg: pd.DataFrame):
+    """
+    Portfolio-level eligibility ratio checks.
+
+    Returns exception records (one per rule violation).
+    """
+
+    exceptions = []
+
+    for _, rule in rules_cfg.iterrows():
+        scope = df[df["platform"] == rule["platform"]].copy()
+
+        if scope.empty:
+            continue
+
+        if rule["loan_type"]:
+            scope = scope[scope["type"] == rule["loan_type"]]
+
+        if rule["min_term"]:
+            scope = scope[scope["Term"] >= rule["min_term"]]
+
+        if rule["max_term"]:
+            scope = scope[scope["Term"] <= rule["max_term"]]
+
+        if rule["fico_threshold"]:
+            scope = scope[scope["FICO Borrower"] < rule["fico_threshold"]]
+
+        numerator = scope[rule["balance_column"]].sum()
+
+        denominator = df[df["platform"] == rule["platform"]][
+            rule["balance_column"]
+        ].sum()
+
+        if denominator == 0:
+            continue
+
+        ratio = numerator / denominator
+
+        if ratio > rule["max_ratio"]:
+            exceptions.append({
+                "rule_id": rule["rule_id"],
+                "exception_type": "ELIGIBILITY_RATIO",
+                "platform": rule["platform"],
+                "severity": rule["severity"],
+                "actual_value": round(ratio, 4),
+                "expected_value": rule["max_ratio"],
+                "difference": round(ratio - rule["max_ratio"], 4),
+                "balance_impact": numerator
+            })
+
+    return pd.DataFrame(exceptions)

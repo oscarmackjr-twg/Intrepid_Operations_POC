@@ -1,0 +1,161 @@
+import pandas as pd
+
+
+def _to_snake(s: str) -> str:
+    return (
+        str(s).strip().lower()
+        .replace("%", "pct")
+        .replace(".", "")
+        .replace("(", "")
+        .replace(")", "")
+        .replace("/", "_")
+        .replace("-", "_")
+        .replace(" ", "_")
+    )
+
+
+BALANCE_COLUMN_ALIASES = {
+    "orig_balance": "original_balance",
+    "origbalance": "original_balance",
+    "orig_balance_": "original_balance",
+    "orig_balance__": "original_balance",
+    "orig_balance___": "original_balance",
+    "orig__balance": "original_balance",
+    "orig_balance____": "original_balance",
+    "orig_balance_____": "original_balance",
+    "orig_balance______": "original_balance",
+    "orig_balance_______": "original_balance",
+    # common human labels:
+    "orig_balance": "original_balance",
+    "orig_balance": "original_balance",
+    "orig_balance": "original_balance",
+}
+
+
+def _normalize_balance_column(raw: str) -> str:
+    s = _to_snake(raw)
+    # Map common variants
+    if s in ("orig_balance", "orig_balance", "orig_balance", "orig_balance", "orig_balance"):
+        return "original_balance"
+    if s in ("purchase_price",):
+        return "purchase_price"
+    if s in ("current_balance",):
+        return "current_balance"
+    return s
+
+
+def eligibility_rules(df: pd.DataFrame, rules_cfg: pd.DataFrame) -> pd.DataFrame:
+    """
+    Portfolio-level eligibility ratio checks.
+
+    Expects df (snake_case) columns:
+      - platform
+      - loan_type            (derived in build_dataset; values like 'standard', 'hybrid', etc.)
+      - term                 (if term-based checks are enabled)
+      - fico                 (for fico_threshold checks)
+      - original_balance / purchase_price (balance_column targets)
+
+    rules_cfg table columns (as you defined):
+      - rule_id, platform, loan_type, max_term, min_term, fico_threshold,
+        max_ratio, balance_column, enabled, severity
+    """
+    if rules_cfg is None or rules_cfg.empty:
+        return pd.DataFrame()
+
+    df = df.copy()
+    df.columns = [str(c).strip() for c in df.columns]
+
+    # Minimal required for platform scoping
+    if "platform" not in df.columns:
+        raise KeyError("eligibility_rules requires df['platform']")
+
+    exceptions = []
+
+    for _, rule in rules_cfg.iterrows():
+        if "enabled" in rule and not bool(rule["enabled"]):
+            continue
+
+        platform = rule.get("platform")
+        if pd.isna(platform) or str(platform).strip() == "":
+            continue
+
+        scope = df[df["platform"] == platform].copy()
+        if scope.empty:
+            continue
+
+        # Loan type filter (expects df.loan_type)
+        loan_type = rule.get("loan_type")
+        if pd.notna(loan_type) and str(loan_type).strip() != "":
+            if "loan_type" not in scope.columns:
+                raise KeyError(
+                    f"Eligibility rule {rule.get('rule_id')} requires df['loan_type'] "
+                    f"but it's missing. Add loan_type derivation in build_dataset."
+                )
+            scope = scope[scope["loan_type"] == str(loan_type).strip().lower()]
+
+        # Term filters
+        max_term = rule.get("max_term")
+        min_term = rule.get("min_term")
+
+        # Compatibility shim: your seed uses min_term=144 but rule_id implies TERM_LE_144
+        if pd.isna(max_term) and pd.notna(min_term):
+            rid = str(rule.get("rule_id") or "")
+            if "TERM_LE_" in rid:
+                max_term = min_term
+                min_term = None
+
+        if pd.notna(min_term):
+            if "term" not in scope.columns:
+                raise KeyError(f"Eligibility rule {rule.get('rule_id')} uses term but df['term'] is missing.")
+            scope = scope[scope["term"] >= int(min_term)]
+
+        if pd.notna(max_term):
+            if "term" not in scope.columns:
+                raise KeyError(f"Eligibility rule {rule.get('rule_id')} uses term but df['term'] is missing.")
+            scope = scope[scope["term"] <= int(max_term)]
+
+        # FICO threshold filter
+        fico_threshold = rule.get("fico_threshold")
+        if pd.notna(fico_threshold):
+            if "fico" not in scope.columns:
+                raise KeyError(f"Eligibility rule {rule.get('rule_id')} uses fico but df['fico'] is missing.")
+            scope = scope[scope["fico"] < float(fico_threshold)]
+
+        # Balance column
+        bal_raw = rule.get("balance_column")
+        if pd.isna(bal_raw) or str(bal_raw).strip() == "":
+            raise ValueError(f"Eligibility rule {rule.get('rule_id')} missing balance_column")
+
+        balance_col = _normalize_balance_column(str(bal_raw))
+
+        if balance_col not in df.columns:
+            raise KeyError(
+                f"Eligibility rule {rule.get('rule_id')} balance_column='{bal_raw}' "
+                f"(normalized to '{balance_col}') not found in df. Columns: {list(df.columns)}"
+            )
+
+        numerator = scope[balance_col].fillna(0).sum()
+        denominator = df[df["platform"] == platform][balance_col].fillna(0).sum()
+
+        if denominator == 0:
+            continue
+
+        ratio = float(numerator) / float(denominator)
+        max_ratio = rule.get("max_ratio")
+        if pd.isna(max_ratio):
+            continue
+
+        if ratio > float(max_ratio):
+            exceptions.append({
+                "rule_id": rule.get("rule_id"),
+                "exception_type": "ELIGIBILITY_RATIO",
+                "platform": platform,
+                "severity": rule.get("severity"),
+                "actual_value": round(ratio, 4),
+                "expected_value": float(max_ratio),
+                "difference": round(ratio - float(max_ratio), 4),
+                "balance_impact": float(numerator),
+                "balance_column": balance_col,
+            })
+
+    return pd.DataFrame(exceptions)
