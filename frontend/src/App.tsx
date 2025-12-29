@@ -1,21 +1,26 @@
-import { Routes, Route } from "react-router-dom";
-import LandingPage from "./pages/LandingPage";
-import RunsPage from "./pages/RunsPage";
-import RunSummaryPage from "./pages/RunSummaryPage";
-import ExceptionsPage from "./pages/ExceptionsPage";
-import NavBar from "./components/NavBar";
+// src/App.tsx
+import React from "react";
+import { Routes, Route, Navigate } from "react-router-dom";
+import { RunListPage } from "./pages/RunListPage";
+import { RunSummaryPage } from "./pages/RunSummaryPage";
+import { RunExceptionsPage } from "./pages/RunExceptionsPage";
 
-export default function App() {
+const App: React.FC = () => {
   return (
-    <>
-      <NavBar />
-      <Routes>
-        <Route path="/" element={<LandingPage />} />
-        <Route path="/runs" element={<RunsPage />} />
-        <Route path="/runs/:runId" element={<RunSummaryPage />} />
-        <Route path="/runs/:runId/exceptions" element={<ExceptionsPage />} />
-      </Routes>
-    </>
-  );
-}
+    <Routes>
+      {/* Home: list of runs */}
+      <Route path="/" element={<RunListPage />} />
 
+      {/* Run summary detail */}
+      <Route path="/runs/:runId" element={<RunSummaryPage />} />
+
+      {/* Exceptions for a run */}
+      <Route path="/runs/:runId/exceptions" element={<RunExceptionsPage />} />
+
+      {/* Catch-all redirect */}
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+};
+
+export default App;

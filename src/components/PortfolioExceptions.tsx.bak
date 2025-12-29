@@ -1,0 +1,101 @@
+// src/components/PortfolioExceptions.tsx
+import React, { useEffect, useState } from "react";
+import { Api, PortfolioException } from "../api";
+
+interface Props {
+  runId: string;
+}
+
+export const PortfolioExceptions: React.FC<Props> = ({ runId }) => {
+  const [items, setItems] = useState<PortfolioException[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    Api.getPortfolioExceptions(runId)
+      .then((data) => {
+        if (!cancelled) {
+          setItems(data);
+        }
+      })
+      .catch((err: any) => {
+        if (!cancelled) {
+          setError(err?.message ?? "Failed to load portfolio exceptions");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [runId]);
+
+  if (loading) {
+    return <div>Loading portfolio checks…</div>;
+  }
+
+  if (error) {
+    return <div className="text-red-600 text-sm">{error}</div>;
+  }
+
+  if (items.length === 0) {
+    return (
+      <p className="text-sm text-gray-600">
+        No portfolio-level eligibility exceptions for this run.
+      </p>
+    );
+  }
+
+  return (
+    <div className="overflow-x-auto border rounded">
+      <table className="min-w-full text-sm">
+        <thead className="bg-gray-50">
+          <tr>
+            <th className="text-left px-3 py-2">Platform</th>
+            <th className="text-left px-3 py-2">Rule</th>
+            <th className="text-left px-3 py-2">Description</th>
+            <th className="text-left px-3 py-2">Actual</th>
+            <th className="text-left px-3 py-2">Expected</th>
+            <th className="text-left px-3 py-2">Balance Impact</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((p) => {
+            const expected =
+              p.expectedMin != null || p.expectedMax != null
+                ? `${p.expectedMin ?? "-"} – ${p.expectedMax ?? "-"}`
+                : "—";
+
+            return (
+              <tr key={p.id} className="border-t">
+                <td className="px-3 py-1">{p.platform ?? "ALL"}</td>
+                <td className="px-3 py-1">{p.ruleId}</td>
+                <td className="px-3 py-1">{p.description}</td>
+                <td className="px-3 py-1">
+                  {p.actualValue.toLocaleString("en-US", {
+                    maximumFractionDigits: 2,
+                  })}
+                </td>
+                <td className="px-3 py-1">{expected}</td>
+                <td className="px-3 py-1">
+                  {p.balanceImpact != null
+                    ? p.balanceImpact.toLocaleString("en-US", {
+                        style: "currency",
+                        currency: "USD",
+                      })
+                    : "—"}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+};

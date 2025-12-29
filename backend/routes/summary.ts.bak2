@@ -1,0 +1,73 @@
+// routes/summary.ts
+import { Router } from "express";
+import { pool } from "../db/pool";
+
+const router = Router();
+
+/**
+ * GET /api/summary/:runId
+ * Returns:
+ * {
+ *   runId: string;
+ *   totalLoans: number;
+ *   loansWithExceptions: number;  // distinct loans that have >= 1 exception
+ *   balanceImpact: number;        // sum of balance_impact for this run
+ * }
+ */
+router.get("/:runId", async (req, res) => {
+  const { runId } = req.params;
+
+  if (!runId) {
+    return res.status(400).json({ error: "runId is required" });
+  }
+
+  try {
+    const [totalLoansRes, loansWithExRes, balanceImpactRes] = await Promise.all([
+      // total loans for the run
+      pool.query(
+        `
+        SELECT COUNT(*)::int AS total_loans
+        FROM loan_fact
+        WHERE run_id = $1
+        `,
+        [runId]
+      ),
+
+      // number of distinct loans that have at least one exception
+      pool.query(
+        `
+        SELECT COUNT(DISTINCT seller_loan_no)::int AS loans_with_exceptions
+        FROM loan_exceptions
+        WHERE run_id = $1
+        `,
+        [runId]
+      ),
+
+      // total balance impact from all exceptions for the run
+      pool.query(
+        `
+        SELECT COALESCE(SUM(balance_impact), 0) AS balance_impact
+        FROM loan_exceptions
+        WHERE run_id = $1
+        `,
+        [runId]
+      ),
+    ]);
+
+    const totalLoans = totalLoansRes.rows[0]?.total_loans ?? 0;
+    const loansWithExceptions = loansWithExRes.rows[0]?.loans_with_exceptions ?? 0;
+    const balanceImpact = Number(balanceImpactRes.rows[0]?.balance_impact ?? 0);
+
+    return res.json({
+      runId,
+      totalLoans,
+      loansWithExceptions,
+      balanceImpact,
+    });
+  } catch (err) {
+    console.error("Error in GET /api/summary/:runId", err);
+    return res.status(500).json({ error: "Failed to fetch run summary" });
+  }
+});
+
+export default router;

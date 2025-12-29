@@ -1,6 +1,6 @@
 // routes/loanDetail.ts
 import { Router } from "express";
-import { pool } from "../db/pool.ts";
+import { pool } from "../db/pool";
 
 const router = Router();
 

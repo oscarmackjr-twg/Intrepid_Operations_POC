@@ -1,48 +1,27 @@
+DROP TABLE IF EXISTS loan_fact CASCADE;
+
 CREATE TABLE loan_fact (
-    run_id                UUID NOT NULL,
-    seller_loan_no        VARCHAR(50) NOT NULL,
-    platform              VARCHAR(20) NOT NULL,   -- prime / sfy / notes
-    loan_program          VARCHAR(200),
-    application_type      VARCHAR(50),
+    id               BIGSERIAL PRIMARY KEY,
 
-    -- Core attributes
-    orig_balance          NUMERIC(18,2),
-    purchase_price        NUMERIC(18,2),
-    current_balance       NUMERIC(18,2),
-    lender_price_pct      NUMERIC(6,3),
-    modeled_purchase_price NUMERIC(18,6),
+    -- join back to run
+    run_id           TEXT NOT NULL,          -- was UUID, now TEXT
+    seller_loan_no   TEXT NOT NULL,
 
-    -- Credit attributes
-    fico_borrower         INT,
-    dti                   NUMERIC(6,3),
-    pti                   NUMERIC(6,3),
-    apr                   NUMERIC(6,3),
+    -- core balances / pricing
+    original_balance NUMERIC(18,2),
+    current_balance  NUMERIC(18,2),
+    purchase_price   NUMERIC(18,2),
+    price_pct        NUMERIC(9,4),          -- purchase_price / original_balance * 100
 
-    -- Loan structure
-    term                  INT,
-    loan_type             VARCHAR(50),   -- standard / hybrid / ninp / wpdi / etc
-    promo_term            INT,
+    -- flags / metrics
+    has_exceptions   BOOLEAN DEFAULT FALSE,
+    status           TEXT,                  -- optional loan status for the run
 
-    -- Dates
-    submit_date           DATE,
-    purchase_date         DATE,
-    monthly_payment_date  DATE,
-
-    -- Flags
-    repurchase            BOOLEAN DEFAULT FALSE,
-    excess_asset          BOOLEAN DEFAULT FALSE,
-    borrowing_base_eligible BOOLEAN DEFAULT TRUE,
-
-    created_at            TIMESTAMP WITH TIME ZONE DEFAULT now(),
-
-    PRIMARY KEY (run_id, seller_loan_no),
-    FOREIGN KEY (run_id) REFERENCES loan_run(run_id)
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE INDEX idx_loan_fact_run_id
+    ON loan_fact(run_id);
 
-CREATE INDEX idx_loan_fact_run ON loan_fact(run_id);
-CREATE INDEX idx_loan_fact_platform ON loan_fact(platform);
-CREATE INDEX idx_loan_fact_program ON loan_fact(loan_program);
-CREATE INDEX idx_loan_fact_fico ON loan_fact(fico_borrower);
-
-
+CREATE INDEX idx_loan_fact_run_loan
+    ON loan_fact(run_id, seller_loan_no);

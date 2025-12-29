@@ -1,16 +1,17 @@
+DROP TABLE IF EXISTS loan_run CASCADE;
+
 CREATE TABLE loan_run (
-    run_id            UUID PRIMARY KEY,
-    as_of_date        DATE NOT NULL,
-    irr_target        NUMERIC(6,3),
-    portfolio         VARCHAR(20),      -- SFY / PRIME / ALL
-    status            VARCHAR(20) NOT NULL, -- PENDING / RUNNING / COMPLETED / FAILED
-    requested_by      VARCHAR(100),
-    started_at        TIMESTAMP WITH TIME ZONE,
-    completed_at      TIMESTAMP WITH TIME ZONE,
-    error_message     TEXT,
-    created_at        TIMESTAMP WITH TIME ZONE DEFAULT now()
+    id          BIGSERIAL PRIMARY KEY,
+    run_id      TEXT NOT NULL UNIQUE,   -- was UUID, now TEXT (e.g. 'TEST_RUN_001')
+
+    as_of_date  DATE NOT NULL,
+    status      TEXT NOT NULL,          -- e.g. 'PENDING', 'COMPLETED', 'FAILED'
+    irr_target  NUMERIC(9,4),           -- 8.0500 etc.
+
+    notes       TEXT,
+
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-
-CREATE INDEX idx_loan_run_asof ON loan_run(as_of_date);
-CREATE INDEX idx_loan_run_status ON loan_run(status);
+CREATE INDEX idx_loan_run_run_id ON loan_run(run_id);

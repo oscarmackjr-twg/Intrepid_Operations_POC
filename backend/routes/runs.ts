@@ -1,7 +1,7 @@
 //  2.1 Get run list (Landing Page)
 // routes/runs.ts
 import { Router } from "express";
-import { pool } from "../db/pool.ts";
+import { pool } from "../db/pool";
 
 const router = Router();
 

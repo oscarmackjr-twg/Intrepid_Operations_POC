@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import { spawn } from "child_process";
 import path from "path";
 import fs from "fs";
+import { pool } from "../db/pool";  // ✅ NEW: use the same pool as /api/runs
 
 const router = Router();
 
@@ -140,6 +141,9 @@ router.post("/run", async (req: Request, res: Response) => {
     args.push("--db-url", effectiveDbUrl);
   }
 
+  console.log("[pipeline] Spawning python:", pythonExe, args);
+  const startedAt = new Date();   // ✅ track when this run started
+
   const proc = spawn(pythonExe, args, {
     cwd: repoRoot,
     env: process.env,
@@ -161,7 +165,9 @@ router.post("/run", async (req: Request, res: Response) => {
     });
   });
 
-  proc.on("close", (code) => {
+  proc.on("close", async (code) => {
+    const completedAt = new Date();   // ✅ when the process finished
+
     if (code !== 0) {
       return res.status(500).json({
         error: "Pipeline execution failed",
@@ -184,6 +190,75 @@ router.post("/run", async (req: Request, res: Response) => {
     if (exists(artifacts.exceptionsCsv)) {
       const lines = fs.readFileSync(artifacts.exceptionsCsv, "utf8").split(/\r?\n/);
       exceptionCount = Math.max(0, lines.length - 1);
+    }
+
+    // ✅ NEW: try to read metadata from the manifest (if present)
+    let asOfDate: string | null = null;
+    let portfolio: string | null = null;
+    let irrTarget: number | null = null;
+
+    try {
+      if (exists(artifacts.manifest)) {
+        const manifestRaw = fs.readFileSync(artifacts.manifest, "utf8");
+        const manifest = JSON.parse(manifestRaw);
+
+        // Be generous with possible field names
+        asOfDate =
+          manifest.as_of_date ||
+          manifest.asOfDate ||
+          null;
+
+        portfolio =
+          manifest.portfolio ??
+          null;
+
+        irrTarget =
+          manifest.irr_target ??
+          manifest.irrTarget ??
+          null;
+      }
+    } catch (e) {
+      console.warn("[pipeline] Could not parse run_manifest.json", e);
+    }
+
+    // ✅ NEW: write / upsert row into loan_run so /api/runs can see it
+    try {
+      await pool.query(
+        `
+        INSERT INTO loan_run (
+          run_id,
+          as_of_date,
+          portfolio,
+          irr_target,
+          status,
+          started_at,
+          completed_at,
+          created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+        ON CONFLICT (run_id) DO UPDATE
+        SET as_of_date   = EXCLUDED.as_of_date,
+            portfolio    = EXCLUDED.portfolio,
+            irr_target   = EXCLUDED.irr_target,
+            status       = EXCLUDED.status,
+            started_at   = EXCLUDED.started_at,
+            completed_at = EXCLUDED.completed_at
+        `,
+        [
+          runId,
+          asOfDate,
+          portfolio,
+          irrTarget,
+          "COMPLETED",      // simple status for now
+          startedAt,
+          completedAt,
+        ]
+      );
+
+      console.log(`[pipeline] Upserted loan_run row for ${runId}`);
+    } catch (e) {
+      console.error("[pipeline] Failed to upsert loan_run row:", e);
+      // We still return success for the pipeline itself; if you want to fail hard, return 500 here instead.
     }
 
     return res.json({

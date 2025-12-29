@@ -1,17 +1,53 @@
+
+DROP TABLE IF EXISTS rule_purchase_price_config ;
+
 CREATE TABLE rule_purchase_price_config (
-    rule_id              VARCHAR PRIMARY KEY,
-    tolerance_bps        INT NOT NULL,          -- e.g. 5 = 0.05%
-    severity             VARCHAR NOT NULL,      -- HIGH / MEDIUM / LOW
-    enabled              BOOLEAN DEFAULT TRUE,
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    -- enable/disable this rule row
+    enabled             BOOLEAN NOT NULL DEFAULT TRUE,
+
+    -- effective dating for selecting the active rule
     effective_start_date DATE,
-    effective_end_date   DATE
+    effective_end_date   DATE,
+
+    -- tolerance in basis points for purchase price comparisons
+    tolerance_bps        NUMERIC(10, 2),
+
+    -- optional min/max lender price bands in bps
+    lender_price_min_bps NUMERIC(10, 2),
+    lender_price_max_bps NUMERIC(10, 2),
+
+    -- optional description / version info
+    rule_name            TEXT,
+    notes                TEXT,
+
+    created_at           TIMESTAMP WITH TIME ZONE DEFAULT now(),
+    updated_at           TIMESTAMP WITH TIME ZONE DEFAULT now()
 );
 
 
+CREATE INDEX idx_rule_ppc_enabled
+    ON rule_purchase_price_config (enabled);
 
-### Sample Data
+CREATE INDEX idx_rule_ppc_effective_dates
+    ON rule_purchase_price_config (effective_start_date, effective_end_date);
 
-INSERT INTO rule_purchase_price_config
-(rule_id, tolerance_bps, severity, enabled)
-VALUES
-('PURCHASE_PRICE_MATCH', 0, 'HIGH', TRUE);
+
+INSERT INTO rule_purchase_price_config (
+    enabled,
+    effective_start_date,
+    tolerance_bps,
+    lender_price_min_bps,
+    lender_price_max_bps,
+    rule_name,
+    notes
+) VALUES (
+    TRUE,
+    CURRENT_DATE,
+    50,      -- 50 bps tolerance
+    NULL,
+    NULL,
+    'Default Purchase Price Rule',
+    'Inserted for initial pipeline testing'
+);

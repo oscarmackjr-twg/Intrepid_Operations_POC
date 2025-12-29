@@ -1,0 +1,183 @@
+// src/api.ts
+export const API_BASE =
+  import.meta.env.VITE_API_BASE ?? "http://localhost:3001/api";
+
+async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+    ...options,
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `API ${options.method ?? "GET"} ${path} failed: ${res.status} ${
+        res.statusText
+      }${text ? ` - ${text}` : ""}`
+    );
+  }
+
+  return (await res.json()) as T;
+}
+
+/** ---- Types ---- */
+
+// Adjust to match your backend shapes
+
+export interface RunListItem {
+  runId: string;
+  asOfDate: string; // ISO string
+  portfolio?: string;
+  irrTarget?: number;
+  status: "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED";
+  createdAt?: string;
+  completedAt?: string | null;
+}
+
+export interface RunSummary {
+  runId: string;
+  asOfDate: string;
+  totalLoans: number;
+  loansWithExceptions: number;
+  totalBalance: number;
+  balanceWithExceptions: number;
+}
+
+export type ExceptionType = "PURCHASE_PRICE" | "COMAP" | "UNDERWRITING" | string;
+export type Severity = "INFO" | "WARN" | "ERROR" | "CRITICAL" | string;
+
+export interface LoanException {
+  id: number;
+  runId: string;
+  sellerLoanNo: string;
+  platform: string;
+  exceptionType: ExceptionType;
+  severity: Severity;
+  ruleId?: string | null;
+  message: string;
+  expectedValue?: string | number | null;
+  actualValue?: string | number | null;
+  balanceImpact?: number | null;
+}
+
+export interface PortfolioException {
+  id: number;
+  runId: string;
+  platform?: string | null;
+  ruleId: string;
+  description: string;
+  actualValue: number;
+  expectedMin?: number | null;
+  expectedMax?: number | null;
+  balanceImpact?: number | null;
+}
+
+export interface LoanFact {
+  runId: string;
+  sellerLoanNo: string;
+  platform: string;
+  loanProgram?: string;
+  origBalance?: number;
+  purchasePrice?: number | null;
+  currentBalance?: number | null;
+  fico?: number | null;
+  dti?: number | null;
+  pti?: number | null;
+  termMonths?: number | null;
+  state?: string | null;
+  [key: string]: unknown;
+}
+
+export interface LoanDetailResponse {
+  loan: LoanFact;
+  exceptions: LoanException[];
+}
+
+export interface RunPipelineRequest {
+  asOfDate: string; // ISO date like "2025-11-18"
+  irrTarget: number;
+  portfolio?: "PRIME" | "SFY" | "ALL";
+  // For now treat these as server-side file identifiers or paths.
+  // Later you can replace with upload IDs.
+  inputFiles: {
+    primeExhibitA: string;
+    sfyExhibitA: string;
+    masterSheet: string;
+    masterSheetNotes: string;
+    tape?: string;
+    fx3?: string;
+    fx4?: string;
+  };
+}
+
+export interface RunPipelineResponse {
+  runId: string;
+  status: "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED";
+  message?: string;
+}
+
+/** ---- API surface ---- */
+
+export const Api = {
+  // List runs
+  getRuns(): Promise<RunListItem[]> {
+    return request<RunListItem[]>("/runs");
+  },
+
+  // Summary for a single run
+  getRunSummary(runId: string): Promise<RunSummary> {
+    return request<RunSummary>(`/summary/${encodeURIComponent(runId)}`);
+  },
+
+  // Loan-level exceptions (paged + filtered)
+  getExceptions(params: {
+    runId: string;
+    platform?: string;
+    exceptionType?: ExceptionType;
+    severity?: Severity;
+    page?: number;
+    pageSize?: number;
+  }): Promise<{
+    items: LoanException[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
+    const searchParams = new URLSearchParams();
+    searchParams.set("runId", params.runId);
+    if (params.platform) searchParams.set("platform", params.platform);
+    if (params.exceptionType)
+      searchParams.set("exceptionType", params.exceptionType);
+    if (params.severity) searchParams.set("severity", params.severity);
+    if (params.page != null) searchParams.set("page", String(params.page));
+    if (params.pageSize != null)
+      searchParams.set("pageSize", String(params.pageSize));
+
+    return request(`/exceptions?${searchParams.toString()}`);
+  },
+
+  // Portfolio-level exceptions (ratios / eligibility)
+  getPortfolioExceptions(runId: string): Promise<PortfolioException[]> {
+    return request<PortfolioException[]>(
+      `/portfolio-exceptions/${encodeURIComponent(runId)}`
+    );
+  },
+
+  // Single-loan detail
+  getLoanDetail(runId: string, loanNo: string): Promise<LoanDetailResponse> {
+    return request<LoanDetailResponse>(
+      `/loan/${encodeURIComponent(runId)}/${encodeURIComponent(loanNo)}`
+    );
+  },
+
+  // Trigger a pipeline run
+  runPipeline(payload: RunPipelineRequest): Promise<RunPipelineResponse> {
+    return request<RunPipelineResponse>("/pipeline/run", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+};

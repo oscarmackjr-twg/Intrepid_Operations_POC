@@ -1,85 +1,94 @@
-Exceptions Grid API (Main Analyst Screen)
 // routes/exceptions.ts
 import { Router } from "express";
 import { pool } from "../db/pool";
 
 const router = Router();
 
-router.get("/", async (req, res) => {
-  const {
-    runId,
-    platform,
-    exceptionType,
-    severity,
-    page = 0,
-    pageSize = 50,
-  } = req.query;
+router.get("/", async (req, res, next) => {
+  try {
+    const runId = String(req.query.runId || "");
 
-  const offset = Number(page) * Number(pageSize);
+    if (!runId) {
+      return res.status(400).json({ error: "runId is required" });
+    }
 
-  const filters = [];
-  const values: any[] = [runId];
-  let idx = 2;
+    const sellerLoanNo = req.query.sellerLoanNo as string | undefined;
+    const ruleId = req.query.ruleId as string | undefined;
+    const severity = req.query.severity as string | undefined;
 
-  if (platform) {
-    filters.push(`f.platform = $${idx++}`);
-    values.push(platform);
+    const params: any[] = [runId];
+    const whereParts: string[] = ["e.run_id = $1"];
+
+    if (sellerLoanNo) {
+      params.push(sellerLoanNo);
+      whereParts.push(`e.seller_loan_no = $${params.length}`);
+    }
+
+    if (ruleId) {
+      params.push(ruleId);
+      whereParts.push(`e.rule_id = $${params.length}`);
+    }
+
+    if (severity) {
+      params.push(severity);
+      whereParts.push(`e.severity = $${params.length}`);
+    }
+
+    const whereClause =
+      whereParts.length > 0 ? `WHERE ${whereParts.join(" AND ")}` : "";
+
+    const pageSize = Number(req.query.pageSize || 50);
+    const page = Number(req.query.page || 0);
+    const offset = page * pageSize;
+
+    params.push(pageSize, offset);
+    const limitIndex = params.length - 1; // last two entries are limit/offset
+
+    const dataQuery = `
+      SELECT
+        e.exception_id,
+        e.seller_loan_no,
+        f.platform,
+        f.loan_program,
+        e.exception_type,
+        e.rule_id,
+        e.severity,
+        e.balance_impact,
+        e.expected_value,
+        e.actual_value,
+        e.difference,
+        e.created_at
+      FROM loan_exceptions e
+      JOIN loan_fact f
+        ON e.run_id = f.run_id
+       AND e.seller_loan_no = f.seller_loan_no
+      ${whereClause}
+      ORDER BY e.created_at DESC
+      LIMIT $${limitIndex} OFFSET $${limitIndex + 1}
+    `;
+
+    const countQuery = `
+      SELECT COUNT(*) AS count
+      FROM loan_exceptions e
+      JOIN loan_fact f
+        ON e.run_id = f.run_id
+       AND e.seller_loan_no = f.seller_loan_no
+      ${whereClause}
+    `;
+
+    const [dataResult, countResult] = await Promise.all([
+      pool.query(dataQuery, params),
+      pool.query(countQuery, params.slice(0, params.length - 2)), // no limit/offset for count
+    ]);
+
+    res.json({
+      runId,
+      total: Number(countResult.rows[0].count),
+      rows: dataResult.rows,
+    });
+  } catch (err) {
+    next(err);
   }
-  if (exceptionType) {
-    filters.push(`e.exception_type = $${idx++}`);
-    values.push(exceptionType);
-  }
-  if (severity) {
-    filters.push(`e.severity = $${idx++}`);
-    values.push(severity);
-  }
-
-  const whereClause = filters.length
-    ? `AND ${filters.join(" AND ")}`
-    : "";
-
-  const dataQuery = `
-    SELECT
-      e.exception_id,
-      e.seller_loan_no,
-      f.platform,
-      f.loan_program,
-      e.exception_type,
-      e.rule_id,
-      e.severity,
-      e.balance_impact,
-      e.created_at
-    FROM loan_exceptions e
-    JOIN loan_fact f
-      ON e.run_id = f.run_id
-     AND e.seller_loan_no = f.seller_loan_no
-    WHERE e.run_id = $1
-    ${whereClause}
-    ORDER BY e.created_at DESC
-    LIMIT $${idx} OFFSET $${idx + 1}
-  `;
-
-  const countQuery = `
-    SELECT COUNT(*)
-    FROM loan_exceptions e
-    JOIN loan_fact f
-      ON e.run_id = f.run_id
-     AND e.seller_loan_no = f.seller_loan_no
-    WHERE e.run_id = $1
-    ${whereClause}
-  `;
-
-  const dataValues = [...values, pageSize, offset];
-
-  const [rows, count] = await Promise.all([
-    pool.query(dataQuery, dataValues),
-    pool.query(countQuery, values),
-  ]);
-
-  res.json({
-    rows: rows.rows,
-    total: Number(count.rows[0].count),
-  });
 });
 
-export default router
+export default router;

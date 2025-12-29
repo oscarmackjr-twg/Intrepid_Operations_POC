@@ -1,0 +1,57 @@
+import request from "supertest";
+import { Pool } from "pg";
+import app from "../app"; // however you export your Express app
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+});
+
+beforeAll(async () => {
+  // Clean tables and insert a known run
+  await pool.query("TRUNCATE loan_exceptions, loan_fact, loan_run CASCADE;");
+
+  await pool.query(
+    `
+    INSERT INTO loan_run (run_id, as_of_date, status, irr_target)
+    VALUES ($1, $2, 'COMPLETED', 8.05)
+  `,
+    ["TEST_RUN_001", "2025-11-18"]
+  );
+
+  await pool.query(
+    `
+      INSERT INTO loan_fact
+        (run_id, seller_loan_no, platform, orig_balance, purchase_price, current_balance)
+      VALUES
+        ('TEST_RUN_001', 'SFC_1', 'PRIME', 1000, 900, 900),
+        ('TEST_RUN_001', 'SFC_2', 'PRIME', 2000, 1800, 1800)
+    `
+  );
+
+  await pool.query(
+    `
+      INSERT INTO loan_exceptions
+        (run_id, seller_loan_no, exception_type, severity, message)
+      VALUES
+        ('TEST_RUN_001', 'SFC_1', 'PURCHASE_PRICE', 'ERROR', 'Test exception')
+    `
+  );
+});
+
+afterAll(async () => {
+  await pool.end();
+});
+
+describe("GET /api/summary/:runId", () => {
+  it("returns summary for a run", async () => {
+    const res = await request(app).get("/api/summary/TEST_RUN_001");
+
+    expect(res.status).toBe(200);
+    expect(res.body.runId).toBe("TEST_RUN_001");
+    // Total loans = 2, 1 with exceptions
+    expect(res.body.totalLoans).toBe(2);
+    expect(res.body.loansWithExceptions).toBe(1);
+    // Total balance = 1000 + 2000
+    expect(res.body.totalBalance).toBe(3000);
+  });
+});

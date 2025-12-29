@@ -1,33 +1,86 @@
-import { useEffect, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
-import { Api } from "../api/client";
+// src/pages/RunSummaryPage.tsx
+import React, { useEffect, useState } from "react";
+import { useParams, Link } from "react-router-dom";
+import { Api } from "../api";
+import type { RunSummary } from "../api";
 
-export default function RunSummaryPage() {
-  const { runId } = useParams();
-  const navigate = useNavigate();
-  const [summary, setSummary] = useState<any>(null);
+export const RunSummaryPage: React.FC = () => {
+  const { runId } = useParams<{ runId: string }>();
+
+  const [summary, setSummary] = useState<RunSummary | null>(null);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (runId) {
-      Api.getRunSummary(runId).then(setSummary).catch(console.error);
-    }
+    if (!runId) return;
+
+    const fetchSummary = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const data = await Api.getRunSummary(runId);
+        setSummary(data);
+      } catch (err: any) {
+        console.error("Failed to fetch run summary", err);
+        setError(err?.message ?? "Failed to fetch run summary");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchSummary();
   }, [runId]);
 
-  if (!summary) return <div>Loading...</div>;
+  if (!runId) {
+    return (
+      <div style={{ padding: "20px" }}>
+        <p>No runId provided in URL.</p>
+        <Link to="/">Back to runs</Link>
+      </div>
+    );
+  }
 
   return (
-    <div style={{ padding: 20 }}>
-      <h2>Run Summary – {runId}</h2>
+    <div style={{ padding: "20px" }}>
+      <h1>Run Summary</h1>
+      <p>
+        <strong>Run ID:</strong> {runId}
+      </p>
 
-      <ul>
-        <li>Total Loans: {summary.total_loans}</li>
-        <li>Total Exceptions: {summary.total_exceptions}</li>
-        <li>CoMAP Exceptions: {summary.comap_exceptions}</li>
-      </ul>
+      <p>
+        <Link to="/">← Back to runs</Link>
+      </p>
 
-      <button onClick={() => navigate(`/runs/${runId}/exceptions`)}>
-        View Exceptions
-      </button>
+      {loading && <p>Loading summary…</p>}
+      {error && <p style={{ color: "red" }}>Error: {error}</p>}
+
+      {summary && !loading && !error && (
+        <div
+          style={{
+            marginTop: "16px",
+            display: "inline-block",
+            padding: "12px 16px",
+            border: "1px solid #ccc",
+            borderRadius: "8px",
+          }}
+        >
+          <p>
+            <strong>Total Loans:</strong> {summary.totalLoans}
+          </p>
+          <p>
+            <strong>Loans with Exceptions:</strong> {summary.loansWithExceptions}
+          </p>
+          <p>
+            <strong>Balance Impact:</strong> {summary.balanceImpact}
+          </p>
+          <p>
+            <Link to={`/runs/${runId}/exceptions`}>
+              View Exceptions →
+            </Link>
+          </p>
+
+        </div>
+      )}
     </div>
   );
-}
+};

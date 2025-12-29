@@ -1,0 +1,1 @@
+python python/run_pipeline.py   --run-id TEST_RUN_001   --prime-exhibit-a inputs/prime.xlsx   --sfy-exhibit-a inputs/sfy.xlsx   --master-sheet inputs/master.xlsx   --master-sheet-notes inputs/notes.xlsx   --tape inputs/tape.csv   --db-url %DATABASE_URL% --output-dir outputs  --fx3 inputs/fx3.xlsx   --fx4 inputs/fx4.xlsx

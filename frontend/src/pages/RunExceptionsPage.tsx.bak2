@@ -1,0 +1,150 @@
+// src/pages/RunExceptionsPage.tsx
+import React, { useEffect, useState } from "react";
+import { useParams, Link } from "react-router-dom";
+import { Api } from "../api";
+
+type ExceptionRow = {
+  exception_id: number;
+  seller_loan_no: string;
+  platform: string;
+  loan_program: string;
+  exception_type: string;
+  rule_id: string;
+  severity: string;
+  balance_impact: number;
+  created_at: string;
+};
+
+export const RunExceptionsPage: React.FC = () => {
+  const { runId } = useParams<{ runId: string }>();
+
+  const [rows, setRows] = useState<ExceptionRow[]>([]);
+  const [total, setTotal] = useState<number>(0);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState<number>(0);
+  const pageSize = 25;
+
+  useEffect(() => {
+    if (!runId) return;
+
+    const fetchExceptions = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+
+        const result = await Api.getExceptions({
+          runId,
+          page,
+          pageSize,
+        });
+
+        console.log("RunExceptionsPage result:", result);
+
+        const list = Array.isArray(result.rows ?? result)
+          ? (result.rows ?? result)
+          : [];
+
+        setRows(list as ExceptionRow[]);
+        setTotal(
+          typeof result.total === "number"
+            ? result.total
+            : list.length
+        );
+      } catch (err: any) {
+        console.error("Error loading exceptions", err);
+        setError(err?.message ?? "Failed to fetch exceptions");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchExceptions();
+  }, [runId, page]);
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  if (!runId) {
+    return (
+      <div style={{ padding: 20 }}>
+        <p>No runId in URL</p>
+        <Link to="/">Back to runs</Link>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: 20 }}>
+      <h1>Exceptions for Run {runId}</h1>
+
+      <p>
+        <Link to={`/runs/${runId}`}>← Back to run summary</Link> |{" "}
+        <Link to="/">Back to runs</Link>
+      </p>
+
+      {loading && <p>Loading exceptions…</p>}
+      {error && <p style={{ color: "red" }}>{error}</p>}
+
+      {!loading && !error && rows.length === 0 && (
+        <p>No exceptions found.</p>
+      )}
+
+      {!loading && !error && rows.length > 0 && (
+        <>
+          <table
+            style={{
+              width: "100%",
+              borderCollapse: "collapse",
+              marginTop: 10,
+            }}
+          >
+            <thead>
+              <tr>
+                <th style={{ borderBottom: "1px solid #ccc" }}>Seller Loan #</th>
+                <th style={{ borderBottom: "1px solid #ccc" }}>Platform</th>
+                <th style={{ borderBottom: "1px solid #ccc" }}>Program</th>
+                <th style={{ borderBottom: "1px solid #ccc" }}>Type</th>
+                <th style={{ borderBottom: "1px solid #ccc" }}>Rule</th>
+                <th style={{ borderBottom: "1px solid #ccc" }}>Severity</th>
+                <th style={{ borderBottom: "1px solid #ccc" }}>Balance Impact</th>
+                <th style={{ borderBottom: "1px solid #ccc" }}>Created At</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((ex) => (
+                <tr key={ex.exception_id}>
+                  <td style={{ borderBottom: "1px solid #eee" }}>{ex.seller_loan_no}</td>
+                  <td style={{ borderBottom: "1px solid #eee" }}>{ex.platform}</td>
+                  <td style={{ borderBottom: "1px solid #eee" }}>{ex.loan_program}</td>
+                  <td style={{ borderBottom: "1px solid #eee" }}>{ex.exception_type}</td>
+                  <td style={{ borderBottom: "1px solid #eee" }}>{ex.rule_id}</td>
+                  <td style={{ borderBottom: "1px solid #eee" }}>{ex.severity}</td>
+                  <td style={{ borderBottom: "1px solid #eee" }}>{ex.balance_impact}</td>
+                  <td style={{ borderBottom: "1px solid #eee" }}>{ex.created_at}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
+            <button
+              disabled={page === 0}
+              onClick={() => setPage((p) => p - 1)}
+            >
+              Prev
+            </button>
+            <span>
+              Page {page + 1} of {totalPages}
+            </span>
+            <button
+              disabled={page + 1 >= totalPages}
+              onClick={() => setPage((p) => p + 1)}
+            >
+              Next
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+};

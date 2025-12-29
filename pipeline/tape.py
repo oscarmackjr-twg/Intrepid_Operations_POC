@@ -10,6 +10,8 @@ def load_tape(tape_csv_path: str) -> pd.DataFrame:
     """
     df = pd.read_csv(tape_csv_path)
     df = normalize_columns(df)
+    df = df.rename(columns={"Account Number": "seller_loan_no"})
+    df["seller_loan_no"] = df["seller_loan_no"].astype(str).str.strip()
     validate_required(df, ["seller_loan_no", "status_codes"], "tape.load_tape")
     return df
 
@@ -37,20 +39,24 @@ def tag_repurchases(tape_df: pd.DataFrame) -> pd.DataFrame:
     return df[cols].drop_duplicates(subset=["seller_loan_no"])
 
 
-def apply_repurchases(loans_df: pd.DataFrame, rep_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Left-merge repurchase flags into loans_df.
-    """
-    df = loans_df.copy()
-    df = normalize_columns(df)
+def apply_repurchases(df: pd.DataFrame, rep: pd.DataFrame) -> pd.DataFrame:
+    # Make sure both sides have the same key name, if needed
+    if "seller_loan_no" not in rep.columns:
+        rep = rep.rename(columns={
+            "Account Number": "seller_loan_no",
+            "account number": "seller_loan_no",
+            # add any other variant you know about here
+        })
 
-    rep = rep_df.copy()
-    rep = normalize_columns(rep)
+    # Force both merge keys to be strings
+    df["seller_loan_no"] = df["seller_loan_no"].astype(str).str.strip()
+    rep["seller_loan_no"] = rep["seller_loan_no"].astype(str).str.strip()
 
-    validate_required(df, ["seller_loan_no"], "tape.apply_repurchases.loans")
-    validate_required(rep, ["seller_loan_no", "repurchased"], "tape.apply_repurchases.rep")
+    merged = df.merge(rep, on="seller_loan_no", how="left")
 
-    df = df.merge(rep, on="seller_loan_no", how="left")
-    df["repurchased"] = df["repurchased"].fillna(False)
+    # If rep has a repurchased flag, normalize it
+    if "repurchased" in merged.columns:
+        merged["repurchased"] = merged["repurchased"].fillna(False).astype(bool)
 
-    return df
+    return merged
+

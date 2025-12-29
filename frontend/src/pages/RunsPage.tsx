@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Api } from "../api/client";
+import { Api } from "../api";
+
 
 export default function RunsPage() {
   const [runs, setRuns] = useState<any[]>([]);

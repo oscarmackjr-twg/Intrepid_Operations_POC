@@ -1,26 +1,38 @@
+DROP TABLE IF EXISTS loan_exceptions CASCADE;
+
 CREATE TABLE loan_exceptions (
-    exception_id      BIGSERIAL PRIMARY KEY,
-    run_id            UUID NOT NULL,
-    seller_loan_no    VARCHAR(50) NOT NULL,
+    id               BIGSERIAL PRIMARY KEY,
 
-    rule_id           VARCHAR(100) NOT NULL,
-    exception_type    VARCHAR(50) NOT NULL, -- PURCHASE_PRICE / COMAP / UNDERWRITING
-    severity          VARCHAR(20),           -- HIGH / MEDIUM / LOW
+    -- run / loan identity
+    run_id           TEXT NOT NULL,          -- was UUID, now TEXT
+    seller_loan_no   TEXT NOT NULL,
 
-    expected_value    VARCHAR(100),
-    actual_value      VARCHAR(100),
-    difference        NUMERIC(18,6),
+    -- rule metadata
+    rule_id          TEXT,                   -- e.g. 'PURCHASE_PRICE', 'ELIGIBILITY_DEFAULT'
+    exception_type   TEXT NOT NULL,          -- high-level type, e.g. 'PURCHASE_PRICE'
 
-    balance_impact    NUMERIC(18,2),
+    severity         TEXT,                   -- 'ERROR', 'WARN', etc.  (nullable now)
+    message          TEXT,                   -- human-readable message (nullable for now)
+    metric_name      TEXT,                   -- optional: which metric was tested
 
-    created_at        TIMESTAMP WITH TIME ZONE DEFAULT now(),
+    -- expected vs actual values
+    expected_value   NUMERIC(18,6),
+    actual_value     NUMERIC(18,6),
+    balance_impact   NUMERIC(18,6),          -- optional; per-loan impact if you compute it
 
-    FOREIGN KEY (run_id, seller_loan_no)
-        REFERENCES loan_fact(run_id, seller_loan_no)
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    -- purchase-price specific fields that your pipeline is writing
+    difference       NUMERIC(18,6),          -- delta in bps/percent vs expectation
+    original_balance NUMERIC(18,2),
+    purchase_price   NUMERIC(18,2)
 );
 
+CREATE INDEX idx_loan_exceptions_run_id
+    ON loan_exceptions(run_id);
 
-CREATE INDEX idx_loan_exc_run ON loan_exceptions(run_id);
-CREATE INDEX idx_loan_exc_rule ON loan_exceptions(rule_id);
-CREATE INDEX idx_loan_exc_type ON loan_exceptions(exception_type);
-CREATE INDEX idx_loan_exc_severity ON loan_exceptions(severity);
+CREATE INDEX idx_loan_exceptions_run_loan
+    ON loan_exceptions(run_id, seller_loan_no);
+
+CREATE INDEX idx_loan_exceptions_rule_type
+    ON loan_exceptions(exception_type, rule_id);

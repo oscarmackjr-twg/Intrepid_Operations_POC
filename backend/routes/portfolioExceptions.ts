@@ -1,7 +1,7 @@
 //Portfolio Eligibility Exceptions API
 // routes/portfolioExceptions.ts
 import { Router } from "express";
-import { pool } from "../db/pool.ts";
+import { pool } from "../db/pool";
 
 const router = Router();
 

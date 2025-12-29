@@ -1,3 +1,9 @@
+#Inputs
+inputs
+
+#Outputs
+outputs
+
 # Logs
 logs
 *.log
@@ -40,6 +46,7 @@ build/Release
 # Dependency directories
 node_modules/
 jspm_packages/
+frontend/node_modules/
 
 # Snowpack dependency directory (https://snowpack.dev/)
 web_modules/

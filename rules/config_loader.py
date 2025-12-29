@@ -22,6 +22,7 @@ from datetime import date
 from typing import Tuple, Optional, Any
 
 import pandas as pd
+from sqlalchemy import text
 
 
 def _lower_cols(df: pd.DataFrame) -> pd.DataFrame:
@@ -39,13 +40,8 @@ def _require_columns(df: pd.DataFrame, required: set[str], name: str) -> None:
 # ---------------------------------------------------------------------
 # Generic rule loaders (DB-backed)
 # ---------------------------------------------------------------------
-def load_purchase_price_rule(engine: Any, as_of_date: date) -> dict:
-    """
-    Load the single active purchase price rule config row as a dict.
-
-    Expects a table named: rule_purchase_price_config
-    """
-    query = """
+def load_purchase_price_rule(engine, as_of_date):
+    sql = text("""
         SELECT *
         FROM rule_purchase_price_config
         WHERE enabled = TRUE
@@ -53,27 +49,23 @@ def load_purchase_price_rule(engine: Any, as_of_date: date) -> dict:
           AND (effective_end_date IS NULL OR effective_end_date >= :dt)
         ORDER BY effective_start_date DESC NULLS LAST
         LIMIT 1
-    """
-    df = pd.read_sql(query, engine, params={"dt": as_of_date})
-    if df.empty:
-        raise ValueError("No active purchase price rule config found for the given date.")
-    return df.iloc[0].to_dict()
+    """)
+
+    df = pd.read_sql(sql, engine, params={"dt": as_of_date})
+    return df
 
 
-def load_eligibility_rules(engine: Any, as_of_date: date) -> pd.DataFrame:
-    """
-    Load eligibility rules as a DataFrame.
-
-    Expects a table named: rule_eligibility_config
-    """
-    query = """
+def load_eligibility_rules(engine, as_of_date):
+    sql = text("""
         SELECT *
         FROM rule_eligibility_config
         WHERE enabled = TRUE
           AND (effective_start_date IS NULL OR effective_start_date <= :dt)
           AND (effective_end_date IS NULL OR effective_end_date >= :dt)
-    """
-    return pd.read_sql(query, engine, params={"dt": as_of_date})
+    """)
+
+    return pd.read_sql(sql, engine, params={"dt": as_of_date})
+
 
 
 # ---------------------------------------------------------------------

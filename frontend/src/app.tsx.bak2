@@ -1,0 +1,21 @@
+// src/App.tsx
+import React from "react";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { RunSummaryPage } from "./pages/RunSummaryPage";
+
+const App: React.FC = () => {
+  return (
+    <BrowserRouter>
+      <Routes>
+        {/* Simple home so we always see something */}
+        <Route path="/" element={<div style={{ padding: 20 }}>App is running 🚀</div>} />
+        {/* Run summary route – navigate here manually for now */}
+        <Route path="/runs/:runId" element={<RunSummaryPage />} />
+        {/* Catch-all redirect */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </BrowserRouter>
+  );
+};
+
+export default App;

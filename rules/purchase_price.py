@@ -1,6 +1,26 @@
+from decimal import Decimal, InvalidOperation
+import math
 import pandas as pd
-from decimal import Decimal
 
+
+def _to_decimal(value, default="0"):
+    """Safely convert a value to Decimal, falling back to `default` on None/NaN/garbage."""
+    if value is None:
+        return Decimal(default)
+
+    # Handle pandas/numpy NaN
+    if isinstance(value, float) and math.isnan(value):
+        return Decimal(default)
+
+    s = str(value).strip()
+    if s == "" or s.lower() == "nan":
+        return Decimal(default)
+
+    try:
+        return Decimal(s)
+    except InvalidOperation:
+        # Last-ditch safety: log or default instead of crashing
+        return Decimal(default)
 
 def purchase_price_rule(df: pd.DataFrame, rule_cfg: dict) -> pd.DataFrame:
     """
@@ -28,7 +48,10 @@ def purchase_price_rule(df: pd.DataFrame, rule_cfg: dict) -> pd.DataFrame:
         )
 
     # tolerance in basis points (bps): 1 bp = 0.01% => divide by 10000 to get percent points
-    tolerance_bps = Decimal(str(rule_cfg["tolerance_bps"]))
+    #tolerance_bps = Decimal(str(rule_cfg["tolerance_bps"]))
+    # Use DB-configured tolerance if valid, otherwise fall back to 0 bps
+    tolerance_bps = _to_decimal(rule_cfg.get("tolerance_bps"), default="0")
+
     tolerance_pct_points = tolerance_bps / Decimal("10000")
 
     # modeled_purchase_price is in dollars; convert to percentage points of par
@@ -49,9 +72,11 @@ def purchase_price_rule(df: pd.DataFrame, rule_cfg: dict) -> pd.DataFrame:
     if exceptions.empty:
         return pd.DataFrame()
 
-    exceptions["rule_id"] = rule_cfg["rule_id"]
+    #exceptions["rule_id"] = rule_cfg["rule_id"]
+    exceptions["rule_id"] = rule_cfg.get("rule_id", "PURCHASE_PRICE")
     exceptions["exception_type"] = "PURCHASE_PRICE"
-    exceptions["severity"] = rule_cfg["severity"]
+    #exceptions["severity"] = rule_cfg["severity"]
+    exceptions["severity"] = rule_cfg.get("severity", "ERROR")
     exceptions["expected_value"] = expected_price_pct.loc[failed]
     exceptions["actual_value"] = actual_price_pct.loc[failed]
     exceptions["difference"] = price_diff.loc[failed]

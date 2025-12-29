@@ -1,61 +1,68 @@
 CREATE TABLE rule_eligibility_config (
-    rule_id           VARCHAR PRIMARY KEY,
-    platform           VARCHAR,     -- PRIME / SFY
-    loan_type          VARCHAR,     -- standard, hybrid, ninp, etc
-    max_term           INT,
-    min_term           INT,
-    fico_threshold     INT,
-    max_ratio          DECIMAL(5,4), -- e.g. 0.1500 = 15%
-    balance_column     VARCHAR,     -- Orig. Balance / Purchase Price
-    enabled            BOOLEAN,
-    severity           VARCHAR
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    -- metadata
+    rule_id                 TEXT NOT NULL,
+    rule_name               TEXT,
+    description             TEXT,
+
+    -- enable/disable row
+    enabled                 BOOLEAN NOT NULL DEFAULT TRUE,
+
+    -- effective dating for selecting current rules
+    effective_start_date    DATE,
+    effective_end_date      DATE,
+
+    -- severity of violation
+    severity                TEXT,   -- e.g., ERROR, WARNING, INFO
+
+    -- metric configuration
+    metric_name             TEXT NOT NULL,      -- what metric we’re testing
+    comparison_operator     TEXT NOT NULL,      -- e.g., <, <=, >, >=, ==, !=
+    threshold_value         NUMERIC(18,6),      -- value to compare against
+
+    -- optional banded thresholds
+    min_value               NUMERIC(18,6),
+    max_value               NUMERIC(18,6),
+
+    -- human-readable output
+    message_template        TEXT,
+
+    -- audit fields
+    created_at              TIMESTAMPTZ DEFAULT now(),
+    updated_at              TIMESTAMPTZ DEFAULT now()
 );
 
 
-###   Prime Check A
+CREATE INDEX idx_rule_elig_effective_dates
+    ON rule_eligibility_config (enabled, effective_start_date, effective_end_date);
 
-INSERT INTO rule_eligibility_config VALUES (
-  'PRIME_STD_FICO_LT_700_TERM_LE_144',
-  'prime',
-  'standard',
-  NULL,
-  144,
-  700,
-  0.1500,
-  'Orig. Balance',
-  TRUE,
-  'HIGH'
+CREATE INDEX idx_rule_elig_rule_id
+    ON rule_eligibility_config (rule_id);
+
+
+INSERT INTO rule_eligibility_config (
+    rule_id,
+    rule_name,
+    description,
+    enabled,
+    effective_start_date,
+    severity,
+    metric_name,
+    comparison_operator,
+    threshold_value,
+    message_template
+) VALUES (
+    'ELIGIBILITY_DEFAULT',
+    'Default Eligibility Rule',
+    'Placeholder rule inserted for pipeline testing',
+    TRUE,
+    CURRENT_DATE,
+    'ERROR',
+    'DUMMY_METRIC',
+    '>=',
+    0,
+    'Default eligibility rule triggered'
 );
 
-
-
-## Prime Large Balance Concentration
-
-INSERT INTO rule_eligibility_config VALUES (
-  'PRIME_BAL_GT_50000',
-  'prime',
-  NULL,
-  NULL,
-  NULL,
-  NULL,
-  0.2000,
-  'Orig. Balance',
-  TRUE,
-  'MEDIUM'
-);
-
-
-### SFY - Hybrid Concentratio
-INSERT INTO rule_eligibility_config VALUES (
-  'SFY_HYBRID_RATIO',
-  'sfy',
-  'hybrid',
-  NULL,
-  NULL,
-  NULL,
-  0.3000,
-  'Orig. Balance',
-  TRUE,
-  'MEDIUM'
-);
 
