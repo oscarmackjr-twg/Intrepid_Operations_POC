@@ -71,37 +71,19 @@ def load_eligibility_rules(engine, as_of_date):
 # ---------------------------------------------------------------------
 # CoMAP configuration loader (DataFrame-backed)
 # ---------------------------------------------------------------------
-def load_comap_config(
-    *,
-    defaults_only: bool = False,
-    engine: Optional[Any] = None,
-    as_of_date: Optional[date] = None,
-) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def load_comap_config(xlsx_path: str | Path | None = None):
     """
-    Return (matrix, cutoff_cfg, meta_cfg) as pandas DataFrames.
-
-    Parameters
-    ----------
-    defaults_only : bool
-        If True, always return hard-coded defaults.
-    engine : optional
-        Future: DB engine for reading CoMAP config tables.
-    as_of_date : optional
-        Future: date-scoped config selection
-
-    Returns
-    -------
-    matrix : pd.DataFrame
-        Columns: comap_id, platform, loan_program, fico_min, fico_max
-    cutoff_cfg : pd.DataFrame
-        Columns: platform, cutoff_date, comap_id_pre, comap_id_post
-    meta_cfg : pd.DataFrame
-        Columns: comap_id, severity
+    Load CoMAP configuration from the given Excel path.
+    If xlsx_path is None, fall back to the existing default behavior.
     """
-    # Placeholder for future DB/FS loading:
-    # if not defaults_only and engine is not None:
-    #     ... load from RDS / CSV / etc ...
-    # else fall back to defaults
+    if xlsx_path is None:
+        # keep your current default path logic here
+        # example (adjust to match your repo):
+        # base = Path(__file__).resolve().parents[1]
+        # xlsx_path = base / "inputs" / "Underwriting_Grids_COMAP.xlsx"
+        ...
+    else:
+        xlsx_path = Path(xlsx_path)
 
     # -------------------------
     # DEFAULTS

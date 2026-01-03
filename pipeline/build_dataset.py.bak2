@@ -1,0 +1,61 @@
+from pathlib import Path
+from typing import Tuple, Dict, Any
+
+import pandas as pd
+
+# This is the original notebook/CLI implementation that actually
+# builds the engine_input.csv given the input Excel files.
+from python.build_dataset import build_dataset as _cli_build_dataset
+
+
+def build_dataset(
+    *,
+    prime_exhibit_a_path: str,
+    sfy_exhibit_a_path: str,
+    master_sheet_path: str,
+    master_sheet_notes_path: str,
+    output_csv_path: str,
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """
+    Wrapper used by run_pipeline.py.
+
+    It delegates to the original CLI-style build_dataset implementation
+    in python/build_dataset.py, which writes the engine_input.csv file.
+
+    Args:
+        prime_exhibit_a_path: Path to PRIME Exhibit A workbook
+        sfy_exhibit_a_path:   Path to SFY Exhibit A workbook
+        master_sheet_path:    Path to master sheet workbook
+        master_sheet_notes_path: Path to master sheet notes workbook
+        output_csv_path:      Desired engine_input.csv path
+
+    Returns:
+        loans_df: DataFrame loaded from output_csv_path
+        dataset_artifacts: dict with at least engine_input_csv path
+    """
+    output_csv = Path(output_csv_path)
+
+    # Call the original CLI function using the parameter names it expects.
+    # IMPORTANT: These keyword names MUST match the signature in
+    # python/build_dataset.build_dataset. If the names differ, you can
+    # adjust them here without touching run_pipeline.py.
+    out_path = _cli_build_dataset(
+        prime_exhibit_a_path=prime_exhibit_a_path,
+        sfy_exhibit_a_path=sfy_exhibit_a_path,
+        master_sheet_path=master_sheet_path,
+        master_sheet_notes_path=master_sheet_notes_path,
+        output_csv_path=str(output_csv),
+    )
+
+    # Ensure we know the final CSV path (in case the CLI function returns it)
+    if out_path:
+        output_csv = Path(out_path)
+
+    # Load the engine input into a DataFrame to be used by the rest of the pipeline
+    loans_df = pd.read_csv(output_csv)
+
+    dataset_artifacts: Dict[str, Any] = {
+        "engine_input_csv": str(output_csv),
+    }
+
+    return loans_df, dataset_artifacts

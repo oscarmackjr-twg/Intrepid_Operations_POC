@@ -1,0 +1,83 @@
+# C:\Users\omack\Intrepid\pythonFramework\loan_engine\pipeline\build_dataset.py
+
+from pathlib import Path
+from typing import Tuple, Dict, Any
+
+import pandas as pd
+
+
+def build_dataset(
+    *,
+    prime_exhibit_a_path: str,
+    sfy_exhibit_a_path: str,
+    master_sheet_path: str,
+    master_sheet_notes_path: str,
+    output_csv_path: str,
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """
+    Build the engine input dataset and write it to output_csv_path.
+
+    This is the function used by run_pipeline.py. It should replicate the
+    behavior of the original notebook / python.build_dataset script:
+
+      - Load PRIME Exhibit A, SFY Exhibit A
+      - Load master sheet + notes
+      - Apply all necessary cleaning / joins / tagging
+      - Produce the final loan-level DataFrame (final_df / engine input)
+      - Write engine_input.csv to output_csv_path
+
+    Args:
+        prime_exhibit_a_path: path to PRIME Exhibit A workbook
+        sfy_exhibit_a_path:   path to SFY Exhibit A workbook
+        master_sheet_path:    path to master sheet workbook
+        master_sheet_notes_path: path to master sheet notes workbook
+        output_csv_path:      full path where engine_input.csv should be written
+
+    Returns:
+        loans_df:  the final loan-level DataFrame (engine input)
+        artifacts: dict that at least includes {"engine_input_csv": output_csv_path}
+    """
+
+    prime_path = Path(prime_exhibit_a_path)
+    sfy_path = Path(sfy_exhibit_a_path)
+    master_path = Path(master_sheet_path)
+    notes_path = Path(master_sheet_notes_path)
+    out_csv = Path(output_csv_path)
+
+    # ---------------------------------------------------------
+    # TODO: paste your existing transformation logic here
+    # ---------------------------------------------------------
+    #
+    # You want here whatever the original python/build_dataset.py does:
+    #  * read prime_path, sfy_path into prime_df, sfy_df
+    #  * clean header rows, types, rename columns, etc.
+    #  * join with master_path and notes_path if needed
+    #  * construct the final loans DataFrame (the one you used as final_df
+    #    in the notebook before writing engine_input.csv)
+    #
+    # For example, in very rough pseudo-code (replace with your real logic):
+    #
+    #   prime_df = pd.read_excel(prime_path)
+    #   sfy_df = pd.read_excel(sfy_path)
+    #   # ... your existing cleaning / tagging ...
+    #   loans_df = ...
+    #
+    # The important part is that loans_df has all the columns the rest of
+    # the pipeline (tape, servicing, purchase_price_checks, etc.) expects.
+    #
+    # Once loans_df is constructed, keep the write + return code below.
+
+    # For now, put a very simple placeholder so the function is syntactically valid.
+    # *** Replace this with your real logic. ***
+    loans_df = pd.DataFrame()
+    # ---------------------------------------------------------
+
+    # Write engine input CSV
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+    loans_df.to_csv(out_csv, index=False)
+
+    artifacts: Dict[str, Any] = {
+        "engine_input_csv": str(out_csv),
+    }
+
+    return loans_df, artifacts

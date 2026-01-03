@@ -6,6 +6,7 @@ import json
 from datetime import date
 
 import pandas as pd
+from pandas.errors import EmptyDataError
 from sqlalchemy import create_engine
 
 # Ensure repo root is importable (Windows-safe)
@@ -19,6 +20,9 @@ from pipeline.tape import load_tape, tag_repurchases, apply_repurchases
 from pipeline.servicing import load_fx_trial_balance, reconcile_servicing
 from pipeline.export_borrowing import export_borrowing_file
 from pipeline.export_ratios import export_ratios_xlsx
+from pipeline.purchase_price_checks import export_purchase_price_mismatch
+from pipeline.export_comap_not_passed import export_comap_not_passed
+from pipeline.export_flagged_loans import export_flagged_loans
 
 from rules.engine import run_purchase_price_rules, run_eligibility_rules, run_comap_rules
 from rules.config_loader import load_comap_config
@@ -45,6 +49,9 @@ def parse_args():
     p.add_argument("--tape", help="Tape20Loans CSV (optional)")
     p.add_argument("--fx3", help="FX3 trial balance CSV (optional)")
     p.add_argument("--fx4", help="FX4 trial balance CSV (optional)")
+
+    # Optional: override COMAP grid workbook
+    p.add_argument("--comap-xlsx", help="Override CoMAP grid Excel path")
 
     p.add_argument("--output-dir", required=True)
     p.add_argument("--dry-run", action="store_true")
@@ -82,9 +89,7 @@ def main():
         "warnings": [],
     }
 
-    sql_engine = None
-    if args.db_url:
-        sql_engine = create_engine(args.db_url)
+    sql_engine = create_engine(args.db_url) if args.db_url else None
 
     # ---------------------------------------------------------
     # 1) Build dataset (Exhibit A + masters)
@@ -100,9 +105,16 @@ def main():
 
     run_manifest["artifacts"]["engine_input_csv"] = str(engine_input_csv)
 
-    # Ensure what we operate on is the same as what we wrote
+    # Ensure what we operate on is the same as what we wrote,
+    # but don't crash if the file is empty or unreadable.
     if engine_input_csv.exists():
-        loans_df = pd.read_csv(engine_input_csv)
+        try:
+            loans_df = pd.read_csv(engine_input_csv)
+        except EmptyDataError:
+            run_manifest["warnings"].append(
+                f"engine_input.csv was empty or unreadable at {engine_input_csv}; "
+                "proceeding with in-memory dataset from build_dataset()."
+            )
 
     # ---------------------------------------------------------
     # 2) Tape repurchase tagging (optional)
@@ -133,28 +145,66 @@ def main():
         loans_df = buckets["check_final_df"]
 
     # ---------------------------------------------------------
+    # 3b) Purchase price mismatch export (Excel + CSV)
+    # ---------------------------------------------------------
+    try:
+        pp_artifacts = export_purchase_price_mismatch(loans_df, output_dir)
+        if pp_artifacts.get("rows", 0) > 0:
+            if "purchase_price_mismatch_xlsx" in pp_artifacts:
+                run_manifest["artifacts"]["purchase_price_mismatch_xlsx"] = pp_artifacts[
+                    "purchase_price_mismatch_xlsx"
+                ]
+            if "purchase_price_mismatch_csv" in pp_artifacts:
+                run_manifest["artifacts"]["purchase_price_mismatch_csv"] = pp_artifacts[
+                    "purchase_price_mismatch_csv"
+                ]
+        run_manifest["counts"]["purchase_price_mismatch"] = pp_artifacts.get("rows", 0)
+    except Exception as e:
+        run_manifest["warnings"].append(f"Failed to export purchase_price_mismatch: {e}")
+
+    # ---------------------------------------------------------
     # 4) Loan-level rules (Purchase Price + CoMAP)
     # ---------------------------------------------------------
-    exceptions = []
+    exceptions_list = []
 
     # Purchase price rules require DB for config loader
     if sql_engine is not None:
         pp_ex = run_purchase_price_rules(loans_df, ctx, sql_engine)
         if pp_ex is not None and not pp_ex.empty:
-            exceptions.append(pp_ex)
+            exceptions_list.append(pp_ex)
     else:
         run_manifest["warnings"].append(
             "No --db-url provided; skipping purchase price rules (config loader requires DB)."
         )
 
-    # CoMAP is in-memory config (defaults ok)
-    matrix_df, cutoff_df, meta_df = load_comap_config()
-    comap_ex = run_comap_rules(loans_df, matrix_df, cutoff_df, meta_df)
-    if comap_ex is not None and not comap_ex.empty:
-        exceptions.append(comap_ex)
+    # CoMAP is in-memory config (defaults ok), optionally overridden by CLI
+    comap_xlsx_path = getattr(args, "comap_xlsx", None)
+    if comap_xlsx_path:
+        matrix_df, cutoff_df, meta_df = load_comap_config(comap_xlsx_path)
+    else:
+        matrix_df, cutoff_df, meta_df = load_comap_config()
 
-    if exceptions:
-        exceptions_df = pd.concat(exceptions, ignore_index=True)
+    comap_ex = run_comap_rules(loans_df, matrix_df, cutoff_df, meta_df)
+    if comap_ex is None:
+        comap_ex = pd.DataFrame()
+
+    # Add CoMAP exceptions to combined list (if any)
+    if not comap_ex.empty:
+        exceptions_list.append(comap_ex)
+
+    # ALWAYS export comap_not_passed.xlsx (even if empty)
+    try:
+        comap_artifacts = export_comap_not_passed(comap_ex, output_dir)
+        run_manifest["artifacts"]["comap_not_passed_xlsx"] = comap_artifacts[
+            "comap_not_passed_xlsx"
+        ]
+        run_manifest["counts"]["comap_not_passed"] = comap_artifacts.get("rows", 0)
+    except Exception as e:
+        run_manifest["warnings"].append(f"Failed to export comap_not_passed.xlsx: {e}")
+
+    # Build combined exceptions DataFrame
+    if exceptions_list:
+        exceptions_df = pd.concat(exceptions_list, ignore_index=True)
     else:
         exceptions_df = pd.DataFrame()
 
@@ -164,12 +214,24 @@ def main():
     run_manifest["counts"]["exceptions"] = int(len(exceptions_df))
 
     # ---------------------------------------------------------
+    # 4b) Flagged loans workbooks (overall + Notes subset)
+    # ---------------------------------------------------------
+    try:
+        flagged_artifacts = export_flagged_loans(loans_df, exceptions_df, output_dir)
+        run_manifest["artifacts"]["flagged_loans_xlsx"] = flagged_artifacts["flagged_loans_xlsx"]
+        run_manifest["artifacts"]["notes_flagged_loans_xlsx"] = flagged_artifacts["notes_flagged_loans_xlsx"]
+        run_manifest["counts"]["flagged_loans"] = flagged_artifacts.get("flagged_count", 0)
+        run_manifest["counts"]["notes_flagged_loans"] = flagged_artifacts.get("notes_flagged_count", 0)
+    except Exception as e:
+        run_manifest["warnings"].append(f"Failed to export flagged loans workbooks: {e}")
+
+    # ---------------------------------------------------------
     # 5) Portfolio eligibility rules (ratios)
     # ---------------------------------------------------------
-    metrics_df = pd.DataFrame()
     if sql_engine is not None:
         metrics_df = run_eligibility_rules(loans_df, ctx, sql_engine)
     else:
+        metrics_df = pd.DataFrame()
         run_manifest["warnings"].append(
             "No --db-url provided; skipping eligibility rules (config loader requires DB)."
         )
@@ -177,7 +239,10 @@ def main():
     # Export ratios workbook (even if empty, so UI has a stable artifact path)
     ratios_xlsx = output_dir / "ratios.xlsx"
     try:
-        export_ratios_xlsx(metrics_df if metrics_df is not None else pd.DataFrame(), str(ratios_xlsx))
+        export_ratios_xlsx(
+            metrics_df if metrics_df is not None else pd.DataFrame(),
+            str(ratios_xlsx),
+        )
         run_manifest["artifacts"]["ratios_xlsx"] = str(ratios_xlsx)
     except Exception as e:
         run_manifest["warnings"].append(f"Failed to export ratios.xlsx: {e}")
@@ -189,7 +254,7 @@ def main():
     # ---------------------------------------------------------
     if not args.dry_run and sql_engine is not None:
         # Loan exceptions
-        if exceptions_df is not None and not exceptions_df.empty:
+        if not exceptions_df.empty:
             df_to_write = exceptions_df.copy()
             if "run_id" not in df_to_write.columns:
                 df_to_write["run_id"] = args.run_id

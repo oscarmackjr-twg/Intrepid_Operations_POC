@@ -2,7 +2,6 @@ import { Router, Request, Response } from "express";
 import { spawn } from "child_process";
 import path from "path";
 import fs from "fs";
-import { pool } from "../db/pool";  // ✅ NEW: use the same pool as /api/runs
 
 const router = Router();
 
@@ -17,6 +16,9 @@ type RunPipelineBody = {
   tapeCsv?: string;
   fx3Csv?: string;
   fx4Csv?: string;
+
+  // NEW: CoMAP grid Excel path
+  comapXlsx?: string;
 
   outputDir: string;
   dryRun?: boolean;
@@ -57,6 +59,7 @@ router.post("/run", async (req: Request, res: Response) => {
     tapeCsv,
     fx3Csv,
     fx4Csv,
+    comapXlsx,
     outputDir,
     dryRun,
     dbUrl,
@@ -78,6 +81,9 @@ router.post("/run", async (req: Request, res: Response) => {
   const fx3Path = fx3Csv ? resolvePath(fx3Csv) : undefined;
   const fx4Path = fx4Csv ? resolvePath(fx4Csv) : undefined;
 
+  // NEW: CoMAP grid path
+  const comapPath = comapXlsx ? resolvePath(comapXlsx) : undefined;
+
   const inputsToCheck: [string, string | undefined][] = [
     ["primeExhibitA", primePath],
     ["sfyExhibitA", sfyPath],
@@ -86,6 +92,7 @@ router.post("/run", async (req: Request, res: Response) => {
     ["tapeCsv", tapePath],
     ["fx3Csv", fx3Path],
     ["fx4Csv", fx4Path],
+    ["comapXlsx", comapPath],
   ];
 
   const missingFiles = inputsToCheck
@@ -133,6 +140,10 @@ router.post("/run", async (req: Request, res: Response) => {
   if (tapePath) args.push("--tape", tapePath);
   if (fx3Path) args.push("--fx3", fx3Path);
   if (fx4Path) args.push("--fx4", fx4Path);
+
+  // NEW: pass CoMAP grid path if provided
+  if (comapPath) args.push("--comap-xlsx", comapPath);
+
   if (dryRun) args.push("--dry-run");
 
   // Allow dbUrl override from request; else use env LOAN_ENGINE_DB_URL
@@ -140,9 +151,6 @@ router.post("/run", async (req: Request, res: Response) => {
   if (effectiveDbUrl) {
     args.push("--db-url", effectiveDbUrl);
   }
-
-  console.log("[pipeline] Spawning python:", pythonExe, args);
-  const startedAt = new Date();   // ✅ track when this run started
 
   const proc = spawn(pythonExe, args, {
     cwd: repoRoot,
@@ -165,9 +173,7 @@ router.post("/run", async (req: Request, res: Response) => {
     });
   });
 
-  proc.on("close", async (code) => {
-    const completedAt = new Date();   // ✅ when the process finished
-
+  proc.on("close", (code) => {
     if (code !== 0) {
       return res.status(500).json({
         error: "Pipeline execution failed",
@@ -182,83 +188,21 @@ router.post("/run", async (req: Request, res: Response) => {
       borrowingFile: path.join(outDirPath, "borrowing_file.csv"),
       ratiosXlsx: path.join(outDirPath, "ratios.xlsx"),
       exceptionsCsv: path.join(outDirPath, "exceptions.csv"),
+      comapNotPassedXlsx: path.join(outDirPath, "comap_not_passed.xlsx"),
+      purchasePriceMismatchXlsx: path.join(outDirPath, "purchase_price_mismatch.xlsx"),
+      purchasePriceMismatchCsv: path.join(outDirPath, "purchase_price_mismatch.csv"),
+      // NEW:
+      flaggedLoansXlsx: path.join(outDirPath, "flagged_loans.xlsx"),
+      notesFlaggedLoansXlsx: path.join(outDirPath, "NOTES_Flagged_loans.xlsx"),
       manifest: path.join(outDirPath, "run_manifest.json"),
     };
+
 
     // Count exceptions rows if present
     let exceptionCount = 0;
     if (exists(artifacts.exceptionsCsv)) {
       const lines = fs.readFileSync(artifacts.exceptionsCsv, "utf8").split(/\r?\n/);
       exceptionCount = Math.max(0, lines.length - 1);
-    }
-
-    // ✅ NEW: try to read metadata from the manifest (if present)
-    let asOfDate: string | null = null;
-    let portfolio: string | null = null;
-    let irrTarget: number | null = null;
-
-    try {
-      if (exists(artifacts.manifest)) {
-        const manifestRaw = fs.readFileSync(artifacts.manifest, "utf8");
-        const manifest = JSON.parse(manifestRaw);
-
-        // Be generous with possible field names
-        asOfDate =
-          manifest.as_of_date ||
-          manifest.asOfDate ||
-          null;
-
-        portfolio =
-          manifest.portfolio ??
-          null;
-
-        irrTarget =
-          manifest.irr_target ??
-          manifest.irrTarget ??
-          null;
-      }
-    } catch (e) {
-      console.warn("[pipeline] Could not parse run_manifest.json", e);
-    }
-
-    // ✅ NEW: write / upsert row into loan_run so /api/runs can see it
-    try {
-      await pool.query(
-        `
-        INSERT INTO loan_run (
-          run_id,
-          as_of_date,
-          portfolio,
-          irr_target,
-          status,
-          started_at,
-          completed_at,
-          created_at
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-        ON CONFLICT (run_id) DO UPDATE
-        SET as_of_date   = EXCLUDED.as_of_date,
-            portfolio    = EXCLUDED.portfolio,
-            irr_target   = EXCLUDED.irr_target,
-            status       = EXCLUDED.status,
-            started_at   = EXCLUDED.started_at,
-            completed_at = EXCLUDED.completed_at
-        `,
-        [
-          runId,
-          asOfDate,
-          portfolio,
-          irrTarget,
-          "COMPLETED",      // simple status for now
-          startedAt,
-          completedAt,
-        ]
-      );
-
-      console.log(`[pipeline] Upserted loan_run row for ${runId}`);
-    } catch (e) {
-      console.error("[pipeline] Failed to upsert loan_run row:", e);
-      // We still return success for the pipeline itself; if you want to fail hard, return 500 here instead.
     }
 
     return res.json({

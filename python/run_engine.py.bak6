@@ -1,0 +1,270 @@
+from pathlib import Path
+import sys
+import os
+import argparse
+import json
+from datetime import date
+
+import pandas as pd
+from pandas.errors import EmptyDataError
+from sqlalchemy import create_engine
+
+# Ensure repo root is importable (Windows-safe)
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+
+from orchestration.context import RunContext
+
+from pipeline.build_dataset import build_dataset
+from pipeline.tape import load_tape, tag_repurchases, apply_repurchases
+from pipeline.servicing import load_fx_trial_balance, reconcile_servicing
+from pipeline.export_borrowing import export_borrowing_file
+from pipeline.export_ratios import export_ratios_xlsx
+from pipeline.purchase_price_checks import export_purchase_price_mismatch
+from pipeline.export_comap_not_passed import export_comap_not_passed
+
+from rules.engine import run_purchase_price_rules, run_eligibility_rules, run_comap_rules
+from rules.config_loader import load_comap_config
+
+
+def _require_venv():
+    if os.environ.get("VIRTUAL_ENV") is None:
+        raise RuntimeError(
+            "Virtual environment is not activated. "
+            "Activate your venv before running the pipeline."
+        )
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description="Full loan eligibility pipeline (notebook replacement)")
+
+    p.add_argument("--run-id", required=True)
+
+    p.add_argument("--prime-exhibit-a", required=True)
+    p.add_argument("--sfy-exhibit-a", required=True)
+    p.add_argument("--master-sheet", required=True)
+    p.add_argument("--master-sheet-notes", required=True)
+
+    p.add_argument("--tape", help="Tape20Loans CSV (optional)")
+    p.add_argument("--fx3", help="FX3 trial balance CSV (optional)")
+    p.add_argument("--fx4", help="FX4 trial balance CSV (optional)")
+
+    p.add_argument("--output-dir", required=True)
+    p.add_argument("--dry-run", action="store_true")
+
+    p.add_argument(
+        "--db-url",
+        default=os.environ.get("LOAN_ENGINE_DB_URL"),
+        help="Optional DB URL for config loading and/or persistence",
+    )
+
+    return p.parse_args()
+
+
+def _write_csv(df: pd.DataFrame, path: Path) -> str:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(path, index=False)
+    return str(path)
+
+
+def main():
+    args = parse_args()
+    _require_venv()
+
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    ctx = RunContext(run_id=args.run_id, as_of_date=date.today())
+
+    run_manifest: dict[str, object] = {
+        "run_id": args.run_id,
+        "as_of_date": ctx.as_of_date.isoformat(),
+        "dry_run": bool(args.dry_run),
+        "artifacts": {},
+        "counts": {},
+        "warnings": [],
+    }
+
+    sql_engine = None
+    if args.db_url:
+        sql_engine = create_engine(args.db_url)
+
+    # ---------------------------------------------------------
+    # 1) Build dataset (Exhibit A + masters)
+    # ---------------------------------------------------------
+    engine_input_csv = output_dir / "engine_input.csv"
+    loans_df, dataset_artifacts = build_dataset(
+        prime_exhibit_a_path=args.prime_exhibit_a,
+        sfy_exhibit_a_path=args.sfy_exhibit_a,
+        master_sheet_path=args.master_sheet,
+        master_sheet_notes_path=args.master_sheet_notes,
+        output_csv_path=str(engine_input_csv),
+    )
+
+    run_manifest["artifacts"]["engine_input_csv"] = str(engine_input_csv)
+
+    # Ensure what we operate on is the same as what we wrote,
+    # but don't crash if the file is empty or unreadable.
+    if engine_input_csv.exists():
+        try:
+            loans_df = pd.read_csv(engine_input_csv)
+        except EmptyDataError:
+            warnings = run_manifest.setdefault("warnings", [])
+            if isinstance(warnings, list):
+                warnings.append(
+                    f"engine_input.csv was empty or unreadable at {engine_input_csv}; "
+                    "proceeding with in-memory dataset from build_dataset()."
+                )
+
+    # ---------------------------------------------------------
+    # 2) Tape repurchase tagging (optional)
+    # ---------------------------------------------------------
+    if args.tape:
+        tape_df = load_tape(args.tape)
+        rep_df = tag_repurchases(tape_df)
+        loans_df = apply_repurchases(loans_df, rep_df)
+
+    # ---------------------------------------------------------
+    # 3) Servicing reconciliation (optional)
+    # ---------------------------------------------------------
+    if args.fx3 and args.fx4:
+        servicing_df = load_fx_trial_balance(args.fx3, args.fx4)
+        buckets = reconcile_servicing(
+            loans_df,
+            servicing_df,
+            cutoff_date=ctx.as_of_date,
+        )
+
+        borrowing_path = export_borrowing_file(
+            buckets["check_final_df"],
+            str(output_dir / "borrowing_file.csv"),
+        )
+        run_manifest["artifacts"]["borrowing_file_csv"] = borrowing_path
+
+        # Use reconciled loans going forward
+        loans_df = buckets["check_final_df"]
+
+    # ---------------------------------------------------------
+    # 3b) Purchase price mismatch export (Excel + CSV)
+    # ---------------------------------------------------------
+    try:
+        pp_artifacts = export_purchase_price_mismatch(loans_df, output_dir)
+        if pp_artifacts.get("rows", 0) > 0:
+            if "purchase_price_mismatch_xlsx" in pp_artifacts:
+                run_manifest["artifacts"]["purchase_price_mismatch_xlsx"] = pp_artifacts[
+                    "purchase_price_mismatch_xlsx"
+                ]
+            if "purchase_price_mismatch_csv" in pp_artifacts:
+                run_manifest["artifacts"]["purchase_price_mismatch_csv"] = pp_artifacts[
+                    "purchase_price_mismatch_csv"
+                ]
+        run_manifest["counts"]["purchase_price_mismatch"] = pp_artifacts.get("rows", 0)
+    except Exception as e:
+        warnings = run_manifest.setdefault("warnings", [])
+        if isinstance(warnings, list):
+            warnings.append(f"Failed to export purchase_price_mismatch: {e}")
+
+    # ---------------------------------------------------------
+    # 4) Loan-level rules (Purchase Price + CoMAP)
+    # ---------------------------------------------------------
+    exceptions: list[pd.DataFrame] = []
+
+    # Purchase price rules require DB for config loader
+    if sql_engine is not None:
+        pp_ex = run_purchase_price_rules(loans_df, ctx, sql_engine)
+        if pp_ex is not None and not pp_ex.empty:
+            exceptions.append(pp_ex)
+    else:
+        warnings = run_manifest.setdefault("warnings", [])
+        if isinstance(warnings, list):
+            warnings.append(
+                "No --db-url provided; skipping purchase price rules (config loader requires DB)."
+            )
+
+    # CoMAP is in-memory config (defaults ok)
+    matrix_df, cutoff_df, meta_df = load_comap_config()
+    comap_ex = run_comap_rules(loans_df, matrix_df, cutoff_df, meta_df)
+    if comap_ex is not None and not comap_ex.empty:
+        exceptions.append(comap_ex)
+        # Export CoMAP not passed loans
+        try:
+            comap_artifacts = export_comap_not_passed(comap_ex, output_dir)
+            run_manifest["artifacts"]["comap_not_passed_xlsx"] = comap_artifacts[
+                "comap_not_passed_xlsx"
+            ]
+            run_manifest["counts"]["comap_not_passed"] = comap_artifacts.get("rows", 0)
+        except Exception as e:
+            warnings = run_manifest.setdefault("warnings", [])
+            if isinstance(warnings, list):
+                warnings.append(f"Failed to export comap_not_passed.xlsx: {e}")
+    else:
+        run_manifest["counts"]["comap_not_passed"] = 0
+
+    if exceptions:
+        exceptions_df = pd.concat(exceptions, ignore_index=True)
+    else:
+        exceptions_df = pd.DataFrame()
+
+    exceptions_csv = output_dir / "exceptions.csv"
+    _write_csv(exceptions_df, exceptions_csv)
+    run_manifest["artifacts"]["exceptions_csv"] = str(exceptions_csv)
+    run_manifest["counts"]["exceptions"] = int(len(exceptions_df))
+
+    # ---------------------------------------------------------
+    # 5) Portfolio eligibility rules (ratios)
+    # ---------------------------------------------------------
+    metrics_df = pd.DataFrame()
+    if sql_engine is not None:
+        metrics_df = run_eligibility_rules(loans_df, ctx, sql_engine)
+    else:
+        warnings = run_manifest.setdefault("warnings", [])
+        if isinstance(warnings, list):
+            warnings.append(
+                "No --db-url provided; skipping eligibility rules (config loader requires DB)."
+            )
+
+    # Export ratios workbook (even if empty, so UI has a stable artifact path)
+    ratios_xlsx = output_dir / "ratios.xlsx"
+    try:
+        export_ratios_xlsx(metrics_df if metrics_df is not None else pd.DataFrame(), str(ratios_xlsx))
+        run_manifest["artifacts"]["ratios_xlsx"] = str(ratios_xlsx)
+    except Exception as e:
+        warnings = run_manifest.setdefault("warnings", [])
+        if isinstance(warnings, list):
+            warnings.append(f"Failed to export ratios.xlsx: {e}")
+
+    run_manifest["counts"]["metrics"] = int(0 if metrics_df is None else len(metrics_df))
+
+    # ---------------------------------------------------------
+    # 6) Persistence (optional, only when not dry-run)
+    # ---------------------------------------------------------
+    if not args.dry_run and sql_engine is not None:
+        # Loan exceptions
+        if exceptions_df is not None and not exceptions_df.empty:
+            df_to_write = exceptions_df.copy()
+            if "run_id" not in df_to_write.columns:
+                df_to_write["run_id"] = args.run_id
+            df_to_write.to_sql("loan_exceptions", sql_engine, if_exists="append", index=False)
+
+        # Portfolio metrics
+        if metrics_df is not None and not metrics_df.empty:
+            m_to_write = metrics_df.copy()
+            if "run_id" not in m_to_write.columns:
+                m_to_write["run_id"] = args.run_id
+            m_to_write.to_sql("portfolio_metrics", sql_engine, if_exists="append", index=False)
+
+    # ---------------------------------------------------------
+    # 7) Write run manifest
+    # ---------------------------------------------------------
+    manifest_path = output_dir / "run_manifest.json"
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(run_manifest, f, indent=2)
+
+    run_manifest["artifacts"]["manifest_json"] = str(manifest_path)
+
+    print(f"[{args.run_id}] Pipeline complete")
+    print(f"Artifacts written to: {output_dir}")
+
+
+if __name__ == "__main__":
+    main()

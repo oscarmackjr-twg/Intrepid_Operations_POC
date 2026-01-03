@@ -1,0 +1,155 @@
+# C:\Users\omack\Intrepid\pythonFramework\loan_engine\pipeline\build_dataset.py
+
+from pathlib import Path
+from typing import Tuple, Dict, Any
+
+import pandas as pd
+
+
+def _load_exhibit(path: Path) -> pd.DataFrame:
+    """
+    Load an Exhibit A workbook in the same pattern as the notebook:
+
+        - Skip the first 4 non-data rows
+        - Use the next row as the header
+        - Drop that header row from the data
+    """
+    # Read raw
+    df = pd.read_excel(path)
+
+    # If it's unexpectedly small, just return as-is
+    if df.shape[0] <= 5:
+        return df
+
+    # Replicate:
+    #   df = df.iloc[4:].reset_index(drop=True)
+    #   df.columns = df.iloc[0]
+    #   df = df[1:].reset_index(drop=True)
+    df = df.iloc[4:].reset_index(drop=True)
+    df.columns = df.iloc[0]
+    df = df[1:].reset_index(drop=True)
+
+    return df
+
+
+def build_dataset(
+    *,
+    prime_exhibit_a_path: str,
+    sfy_exhibit_a_path: str,
+    master_sheet_path: str,
+    master_sheet_notes_path: str,
+    output_csv_path: str,
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """
+    Build the engine input dataset and write it to output_csv_path.
+
+    This is the function used by run_pipeline.py. It roughly mirrors the
+    notebook behavior:
+
+      - Load PRIME Exhibit A, SFY Exhibit A
+      - Normalize headers (skip first 4 rows, use next row as columns)
+      - Tag each loan with a Platform (PRIME / SFY)
+      - Optionally merge in MASTER_SHEET and MASTER_SHEET - Notes
+      - Concatenate to a single DataFrame
+      - Write engine_input.csv to output_csv_path
+
+    Returns:
+        loans_df:  the final loan-level DataFrame (engine input)
+        artifacts: dict with at least {"engine_input_csv": output_csv_path}
+    """
+
+    prime_path = Path(prime_exhibit_a_path)
+    sfy_path = Path(sfy_exhibit_a_path)
+    master_path = Path(master_sheet_path)
+    notes_path = Path(master_sheet_notes_path)
+    out_csv = Path(output_csv_path)
+
+    # ---------------------------------------------------------
+    # 1) Load Exhibit A files
+    # ---------------------------------------------------------
+    sfy_df = _load_exhibit(sfy_path)
+    prime_df = _load_exhibit(prime_path)
+
+    # Normalize SFY TU144 column name as in the notebook
+    # (only if those variants exist; otherwise this is a no-op)
+    if not sfy_df.empty:
+        sfy_df = sfy_df.rename(
+            columns={
+                "TU_144": "TU144",
+                "Tu_144": "TU144",
+                "tu_144": "TU144",
+            }
+        )
+
+    # Tag platforms (only if frames are non-empty)
+    if not sfy_df.empty:
+        sfy_df["Platform"] = "SFY"
+    if not prime_df.empty:
+        prime_df["Platform"] = "PRIME"
+
+    # ---------------------------------------------------------
+    # 2) Concatenate PRIME + SFY loan rows
+    # ---------------------------------------------------------
+    if not prime_df.empty and not sfy_df.empty:
+        loans_df = pd.concat([prime_df, sfy_df], ignore_index=True)
+    elif not prime_df.empty:
+        loans_df = prime_df.copy()
+    elif not sfy_df.empty:
+        loans_df = sfy_df.copy()
+    else:
+        # If both are empty, at least create a clearly empty file with no crash
+        loans_df = pd.DataFrame()
+
+    # ---------------------------------------------------------
+    # 3) Optional: enrich with MASTER_SHEET + Notes
+    # ---------------------------------------------------------
+    try:
+        master_df = pd.read_excel(master_path)
+        notes_df = pd.read_excel(notes_path)
+
+        # Mirror the notebook behavior:
+        #   df_loans_types["Platform"] = df_loans_types.platform.str.upper()
+        #   notes['loan program'] = notes['loan program'].apply(lambda x: x + 'notes')
+        #   notes["Platform"] = notes.platform.str.upper()
+        #   df_loans_types = pd.concat([df_loans_types, notes])
+        if not master_df.empty and "platform" in master_df.columns:
+            master_df["Platform"] = master_df["platform"].astype(str).str.upper()
+
+        if not notes_df.empty:
+            if "loan program" in notes_df.columns:
+                notes_df["loan program"] = notes_df["loan program"].astype(str) + "notes"
+            if "platform" in notes_df.columns:
+                notes_df["Platform"] = notes_df["platform"].astype(str).str.upper()
+
+        df_loans_types = pd.concat([master_df, notes_df], ignore_index=True)
+
+        # Only attempt a merge if we have the expected join keys
+        if (
+            not loans_df.empty
+            and "Loan Program" in loans_df.columns
+            and "Platform" in loans_df.columns
+            and "loan program" in df_loans_types.columns
+            and "Platform" in df_loans_types.columns
+        ):
+            # Align join key name
+            loans_df = loans_df.rename(columns={"Loan Program": "loan program"})
+            loans_df = loans_df.merge(
+                df_loans_types,
+                on=["loan program", "Platform"],
+                how="left",
+            )
+    except Exception:
+        # If anything goes wrong in enrichment, continue with bare Exhibit A data
+        pass
+
+    # ---------------------------------------------------------
+    # 4) Write engine input CSV
+    # ---------------------------------------------------------
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+    loans_df.to_csv(out_csv, index=False)
+
+    artifacts: Dict[str, Any] = {
+        "engine_input_csv": str(out_csv),
+    }
+
+    return loans_df, artifacts
