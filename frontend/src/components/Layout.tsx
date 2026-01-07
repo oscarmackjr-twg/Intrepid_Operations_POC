@@ -10,33 +10,26 @@ type LayoutProps = {
 
 export const Layout: React.FC<LayoutProps> = ({ children }) => {
   return (
-    <div className="min-h-screen flex flex-col bg-white text-slate-900">
-
-
-      {/* Top navigation bar with TWG branding (handled inside <Navbar />) */}
-      <header className="border-b border-slate-800">
+    <div className="min-h-screen flex flex-col bg-[--color-page-bg] text-slate-900 font-sans">
+      {/* Branded header */}
+      <header className="shadow-sm z-20">
         <Navbar />
       </header>
 
-      {/* Main app area: sidebar + main content */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Left sidebar for navigation / previous runs */}
-        <aside className="w-64 border-r border-slate-800 bg-slate-950/60 backdrop-blur">
-
+      {/* Sidebar + content */}
+      <div className="flex flex-1 max-h-[calc(100vh-56px)]">
+        <aside className="w-64 bg-white border-r border-[--color-brand-border]">
           <Sidebar />
         </aside>
 
-        {/* Primary content area */}
-
-        <main className="flex-1 p-6 overflow-auto bg-white">
-
-          {children}
+        <main className="flex-1 overflow-auto p-6">
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+            {children}
+          </div>
         </main>
       </div>
 
-      {/* Footer */}
-      <footer className="border-t border-slate-200 bg-slate-50">
-
+      <footer className="border-t border-[--color-brand-border] bg-white text-xs text-slate-500 px-6 py-3">
         <Footer />
       </footer>
     </div>

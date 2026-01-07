@@ -20,11 +20,14 @@ export interface RunListItem {
 
 // Adjust this if your backend returns more / different fields
 export interface RunException {
-  loan_id: string;
-  exception_type: string;
-  message: string;
-  balance_delta?: number | null;
-  [key: string]: unknown;
+  rule_id: string;
+  platform: string | null;
+  severity: string;
+  expected_value: string | null;
+  actual_value: string | null;
+  difference: string | number | null;
+  balance_impact: number;
+  created_at: string;
 }
 
 // ---- API base + helpers ----
@@ -33,7 +36,10 @@ export interface RunException {
 // Otherwise we assume the frontend is served from the same origin as the API.
 const API_BASE: string = import.meta.env.VITE_API_BASE_URL ?? "";
 
-function buildUrl(path: string, query?: Record<string, string | number | boolean | null | undefined>): string {
+function buildUrl(
+  path: string,
+  query?: Record<string, string | number | boolean | null | undefined>
+): string {
   const url = new URL(path, API_BASE || window.location.origin);
 
   if (query) {
@@ -93,10 +99,10 @@ export const Api = {
 
   /**
    * Get summary info for a specific run.
-   * Adjust URL if your backend route is different.
+   * BACKEND: GET /api/summary/:runId (from summary.ts)
    */
   async getRunSummary(runId: string): Promise<RunSummary> {
-    const url = buildUrl(`/api/runs/${encodeURIComponent(runId)}/summary`);
+    const url = buildUrl(`/api/summary/${encodeURIComponent(runId)}`);
 
     console.log("GET getRunSummary →", url);
 
@@ -112,28 +118,26 @@ export const Api = {
 
   /**
    * Get exceptions for a specific run.
-   * Adjust URL / type to match your backend.
+   * BACKEND (likely): GET /api/portfolio-exceptions/:runId
+   * If your portfolioExceptions.ts uses a slightly different path,
+   * just change the string below to match it exactly.
    */
-  async getExceptions(runId: string): Promise<RunException[]> {
-    const url = buildUrl(`/api/runs/${encodeURIComponent(runId)}/exceptions`);
+   async getExceptions(runId: string): Promise<RunException[]> {
+     const url = buildUrl(
+       `/api/portfolio-exceptions/${encodeURIComponent(runId)}`
+     );
 
-    console.log("GET getExceptions →", url);
+     console.log("GET getExceptions →", url);
 
-    const res = await fetch(url, {
-      method: "GET",
-    });
+     const res = await fetch(url, {
+       method: "GET",
+     });
 
-    const data = await handleJsonResponse<RunException[] | { rows: RunException[] }>(res);
+     // Backend returns plain array: res.json(result.rows);
+     const data = await handleJsonResponse<RunException[]>(res);
 
-    // Support both plain array or { rows: [...] }
-    const rows = Array.isArray(data)
-      ? data
-      : Array.isArray((data as any).rows)
-      ? (data as any).rows
-      : [];
+     console.log("getExceptions data:", data);
 
-    console.log("getExceptions parsed rows:", rows);
-
-    return rows;
-  },
+     return data;
+   },
 };

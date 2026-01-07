@@ -3,7 +3,7 @@ Invoke-RestMethod `
   -Method POST `
   -ContentType "application/json" `
   -Body (@{
-    runId            = "TEST_RUN_008"
+    runId            = "TEST_RUN_009"
 
     primeExhibitA    = "inputs\prime.xlsx"
     sfyExhibitA      = "inputs\sfy.xlsx"
@@ -15,7 +15,7 @@ Invoke-RestMethod `
     # NEW: path to your CoMAP grid file (relative to repo root or absolute)
     comapXlsx        = "inputs\Underwriting_Grids_COMAP.xlsx"
 
-    outputDir        = "outputs\TEST_RUN_008"
+    outputDir        = "outputs\TEST_RUN_009"
     dryRun           = $false
 
     dbUrl            = "postgresql://postgres:Gillian2026!!!@localhost:5432/intrepid"
